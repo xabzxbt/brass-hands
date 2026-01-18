@@ -1,0 +1,89 @@
+/* 🎨 Neo-Brutalist Global Styles */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+	body {
+		@apply bg-[#F5F5F5] text-black font-sans antialiased transition-colors duration-200;
+	}
+
+	h1,
+	h2,
+	h3,
+	h4,
+	h5,
+	h6 {
+		@apply font-heading uppercase tracking-tighter;
+	}
+
+	code,
+	pre {
+		@apply font-mono;
+	}
+}
+
+@layer components {
+	.brutal-card {
+		@apply bg-brutal-card border-2 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none p-6 transition-all;
+	}
+
+	.brutal-btn {
+		@apply bg-white text-black border-2 border-black shadow-[4px_4px_0px_0px_rgba(255,87,34,1)] rounded-none px-6 py-3 font-bold uppercase tracking-tight transition-all active:translate-x-[2px] active:translate-y-[2px] active:shadow-none hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed;
+	}
+
+	.brutal-btn-primary {
+		@apply bg-brutal-primary text-white hover:bg-brutal-primary/90 border-black shadow-[4px_4px_0px_0px_rgba(255,87,34,0.2)];
+	}
+
+	.brutal-input {
+		@apply bg-white text-black border-2 border-black rounded-none px-4 py-2 focus:outline-none focus:ring-2 focus:ring-brutal-primary/50;
+	}
+}
+
+@layer utilities {
+	.container {
+		@apply max-w-4xl mx-auto px-4;
+	}
+
+	.bg-hazard {
+		background: repeating-linear-gradient(
+			45deg,
+			rgba(0, 0, 0, 0.1),
+			rgba(0, 0, 0, 0.1) 10px,
+			rgba(255, 255, 255, 0.05) 10px,
+			rgba(255, 255, 255, 0.05) 20px
+		);
+	}
+
+	.tech-border {
+		border-style: dotted;
+		border-width: 1px;
+	}
+
+	.bg-dotted-repeat {
+		background-image: radial-gradient(circle, #000 1px, transparent 1px);
+		background-size: 8px 8px;
+		background-repeat: repeat-x;
+	}
+
+	@keyframes blink {
+		0%, 100% { opacity: 1; }
+		50% { opacity: 0; }
+	}
+
+	@keyframes fade-in {
+		from { opacity: 0; transform: translateY(10px); }
+		to { opacity: 1; transform: translateY(0); }
+	}
+
+	.animate-blink {
+		animation: blink 1s step-end infinite;
+	}
+
+	.animate-fade-in {
+		animation: fade-in 0.5s ease-out forwards;
+	}
+}
