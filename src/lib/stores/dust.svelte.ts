@@ -6,6 +6,11 @@ import { walletStore } from './wallet.svelte';
 import type { TargetToken } from '$lib/config/constants';
 import { TOKEN_ADDRESSES, RELAY_API_KEY } from '$lib/config/constants';
 
+// FIX: Helper to validate chainId
+function isValidChainId(chainId: number | null): chainId is ChainId {
+	return chainId !== null && [1, 10, 56, 137, 8453, 42161].includes(chainId);
+}
+
 class DustStore {
 	isScanning = $state(false);
 	isCheckingRoutes = $state(false);
@@ -18,6 +23,9 @@ class DustStore {
 	estimatedGasCost = $state(0);
 	error = $state<string | null>(null);
 	lastScanTime = $state<number | null>(null);
+	
+	// FIX: Track scan generation to prevent race conditions
+	private scanGeneration = 0;
 
 	totalValue = $derived(calculateTotalValue(this.selectedTokens));
 	mainTokens = $derived(this.filteredTokens.filter(t => (t.valueUsd ?? 0) >= 0.01));
@@ -34,11 +42,31 @@ class DustStore {
 	hasSelection = $derived(this.selectedTokens.length > 0);
 
 	async scan(address: string, chainId: ChainId) {
+		// FIX: Validate inputs
+		if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+			this.error = 'Invalid wallet address';
+			return;
+		}
+		
+		if (!isValidChainId(chainId)) {
+			this.error = 'Unsupported chain';
+			return;
+		}
+		
+		// FIX: Increment generation to track this scan
+		const currentGeneration = ++this.scanGeneration;
+		
 		this.isScanning = true;
 		this.error = null;
 
 		try {
 			const holdings = await fetchHoldings(address, chainId);
+			
+			// FIX: Check if this scan is still current
+			if (currentGeneration !== this.scanGeneration) {
+				console.log('Scan superseded by newer scan, discarding results');
+				return;
+			}
 
 			this.scannedTokens = holdings.tokens;
 			this.filteredTokens = filterDustTokens(holdings.tokens);
@@ -48,21 +76,35 @@ class DustStore {
 			// REMOVED: Automatic route checking for all tokens.
 			// Logic is now: User selects -> We check route for that selection.
 		} catch (err) {
-			this.error = err instanceof Error ? err.message : 'Failed to scan tokens';
-			console.error('Scan error:', err);
+			// FIX: Only update error if this scan is still current
+			if (currentGeneration === this.scanGeneration) {
+				this.error = err instanceof Error ? err.message : 'Failed to scan tokens';
+				console.error('Scan error:', err);
+			}
 		} finally {
-			this.isScanning = false;
+			// FIX: Only update loading state if this scan is still current
+			if (currentGeneration === this.scanGeneration) {
+				this.isScanning = false;
+			}
 		}
 	}
 
 	async checkRoutesForTokens(chainId: ChainId, userAddress: string) {
 		if (this.filteredTokens.length === 0) return;
+		
+		// FIX: Validate inputs
+		if (!isValidChainId(chainId) || !userAddress) return;
 
 		this.isCheckingRoutes = true;
 
 		try {
 			// Get destination token address
 			const addresses = TOKEN_ADDRESSES[chainId as keyof typeof TOKEN_ADDRESSES];
+			if (!addresses) {
+				console.warn('No token addresses configured for chain', chainId);
+				return;
+			}
+			
 			let destToken: string;
 			if (this.targetToken === 'ETH') {
 				destToken = addresses?.WETH || '0x0000000000000000000000000000000000000000';
@@ -118,8 +160,8 @@ class DustStore {
 		this.selectedTokens = this.selectedTokens.filter(t => !this.isTargetToken(t));
 		
 		// Re-check routes for new target
-		if (walletStore.address && walletStore.chainId) {
-			this.checkRoutesForTokens(walletStore.chainId as ChainId, walletStore.address);
+		if (walletStore.address && isValidChainId(walletStore.chainId)) {
+			this.checkRoutesForTokens(walletStore.chainId, walletStore.address);
 		}
 		
 		this.updateQuotes();
@@ -165,6 +207,9 @@ class DustStore {
 		}
 	}
 
+	// FIX: Track quote generation to prevent race conditions
+	private quoteGeneration = 0;
+
 	async updateQuotes() {
 		// Only select tokens that are NOT the target token
 		const tokensToQuote = this.selectedTokens.filter(
@@ -176,12 +221,19 @@ class DustStore {
 			return;
 		}
 
-		if (!walletStore.address || !walletStore.chainId) return;
+		if (!walletStore.address || !isValidChainId(walletStore.chainId)) return;
 
+		// FIX: Track this quote request
+		const currentGeneration = ++this.quoteGeneration;
+		
 		this.isQuoting = true;
 		try {
-			const chainId = walletStore.chainId as ChainId;
+			const chainId = walletStore.chainId;
 			const addresses = TOKEN_ADDRESSES[chainId as keyof typeof TOKEN_ADDRESSES];
+			
+			if (!addresses) {
+				throw new Error(`No token addresses for chain ${chainId}`);
+			}
 			
 			let outputToken: `0x${string}`;
 			if (this.targetToken === 'ETH') {
@@ -209,31 +261,49 @@ class DustStore {
 			// let's follow batchbridge and use individual quotes to avoid Relay's multi-input limitations.
 			const useMultiInput = false; // Force individual quotes for now to match batchbridge same-chain behavior
 
+			let newQuotes: QuoteResponse[];
+			
 			if (useMultiInput && requests.length > 1) {
 				const batchQuote = await getMultiInputQuote(requests);
 				if (batchQuote) {
-					this.quotes = [batchQuote];
-					return;
+					newQuotes = [batchQuote];
+				} else {
+					newQuotes = await getMultipleQuotes(requests);
 				}
+			} else {
+				newQuotes = await getMultipleQuotes(requests);
 			}
-
-			this.quotes = await getMultipleQuotes(requests);
+			
+			// FIX: Only update if this is still the current quote request
+			if (currentGeneration !== this.quoteGeneration) {
+				console.log('Quote request superseded, discarding results');
+				return;
+			}
+			
+			this.quotes = newQuotes;
 			
 			// Update gas estimate after getting quotes
-			if (walletStore.chainId && walletStore.detectedStrategy) {
-				await this.updateGasEstimate(chainId, walletStore.detectedStrategy);
+			if (isValidChainId(walletStore.chainId) && walletStore.detectedStrategy) {
+				await this.updateGasEstimate(walletStore.chainId, walletStore.detectedStrategy);
 			}
 
 			// Update liquidity status based on quote results
 			this.quotes.forEach((quote, idx) => {
-				if (quote.isLiquid === false) {
+				if (quote.isLiquid === false && tokensToQuote[idx]) {
 					this.updateTokenLiquidity(tokensToQuote[idx].address, false);
 				}
 			});
 		} catch (err) {
 			console.error('Failed to fetch quotes:', err);
+			// FIX: Only update error if this is still current
+			if (currentGeneration === this.quoteGeneration) {
+				this.error = err instanceof Error ? err.message : 'Failed to fetch quotes';
+			}
 		} finally {
-			this.isQuoting = false;
+			// FIX: Only update loading state if this is still current
+			if (currentGeneration === this.quoteGeneration) {
+				this.isQuoting = false;
+			}
 		}
 	}
 
@@ -260,16 +330,23 @@ class DustStore {
 			return;
 		}
 
-		this.estimatedGasCost = await estimateGasCostUsd(
-			chainId,
-			strategy,
-			this.selectedTokens.length
-		);
+		try {
+			this.estimatedGasCost = await estimateGasCostUsd(
+				chainId,
+				strategy,
+				this.selectedTokens.length
+			);
+		} catch (err) {
+			console.error('Failed to estimate gas:', err);
+			this.estimatedGasCost = 0;
+		}
 	}
 
 	updateTokenLiquidity(address: `0x${string}`, isLiquid: boolean) {
+		const normalizedAddress = address.toLowerCase();
+		
 		const update = (tokens: Token[]) =>
-			tokens.map((t) => (t.address.toLowerCase() === address.toLowerCase() ? { ...t, isLiquid } : t));
+			tokens.map((t) => (t.address.toLowerCase() === normalizedAddress ? { ...t, isLiquid } : t));
 
 		this.scannedTokens = update(this.scannedTokens);
 		this.filteredTokens = update(this.filteredTokens);
@@ -282,12 +359,17 @@ class DustStore {
 	reset() {
 		this.isScanning = false;
 		this.isCheckingRoutes = false;
+		this.isQuoting = false;
 		this.scannedTokens = [];
 		this.filteredTokens = [];
 		this.selectedTokens = [];
 		this.quotes = [];
 		this.error = null;
 		this.lastScanTime = null;
+		this.estimatedGasCost = 0;
+		// FIX: Reset generations
+		this.scanGeneration = 0;
+		this.quoteGeneration = 0;
 	}
 }
 

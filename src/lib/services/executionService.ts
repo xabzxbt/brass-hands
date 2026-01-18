@@ -3,6 +3,12 @@ import type { TargetToken } from '$lib/config/constants';
 import { walletStore } from '$lib/stores/wallet.svelte';
 import { getCapabilities, getWalletClient } from '@wagmi/core';
 import { config } from '$lib/config/wagmi';
+import { isAddress } from 'viem';
+
+// FIX: Validate chainId
+function isValidChainId(chainId: number): chainId is ChainId {
+	return [1, 10, 56, 137, 8453, 42161].includes(chainId);
+}
 
 export async function detectStrategy(address: `0x${string}`, chainId: number): Promise<ExecutionStrategy> {
 	walletStore.isDetectingStrategy = true;
@@ -12,7 +18,11 @@ export async function detectStrategy(address: `0x${string}`, chainId: number): P
 			walletStore.setStrategy('STANDARD_BATCH');
 			return 'STANDARD_BATCH';
 		}
-	} catch {}
+	} catch {
+		// Ignore errors
+	} finally {
+		walletStore.isDetectingStrategy = false;
+	}
 	walletStore.setStrategy('LEGACY');
 	return 'LEGACY';
 }
@@ -62,6 +72,9 @@ export interface ExecutionResult {
 	error?: string;
 	totalSwapped: bigint;
 	estimatedOutput: bigint;
+	// FIX: Add partial success info
+	successfulTokens?: string[];
+	failedTokens?: string[];
 }
 
 // Helper to add delay between operations
@@ -75,6 +88,27 @@ export async function executeBatch(
 	onStatusUpdate?: (status: BatchStatus) => void,
 	targetToken: TargetToken = 'ETH'
 ): Promise<ExecutionResult> {
+	// FIX: Validate inputs
+	if (!ownerAddress || !isAddress(ownerAddress)) {
+		return {
+			success: false,
+			txHashes: [],
+			error: 'Invalid owner address',
+			totalSwapped: 0n,
+			estimatedOutput: 0n
+		};
+	}
+	
+	if (!isValidChainId(chainId)) {
+		return {
+			success: false,
+			txHashes: [],
+			error: `Unsupported chain ID: ${chainId}`,
+			totalSwapped: 0n,
+			estimatedOutput: 0n
+		};
+	}
+	
 	try {
 		if (onStatusUpdate) onStatusUpdate('ANALYZING');
 
@@ -161,6 +195,8 @@ async function executeBatchWithIndividualQuotes(
 	
 	const calls: Array<{ to: `0x${string}`; data: `0x${string}`; value: bigint }> = [];
 	const errors: string[] = [];
+	const successfulTokens: string[] = [];
+	const failedTokens: string[] = [];
 	let totalOut = 0n;
 	
 	// Get quotes for all tokens sequentially with delay to avoid rate limiting
@@ -191,12 +227,14 @@ async function executeBatchWithIndividualQuotes(
 				const errorMsg = quote?.routeDescription || 'No route found';
 				console.warn(`⚠️ Skipping ${token.symbol}: ${errorMsg}`);
 				errors.push(`${token.symbol}: ${errorMsg}`);
+				failedTokens.push(token.symbol);
 				continue;
 			}
 			
 			if (!quote.to || quote.to === '0x0000000000000000000000000000000000000000' || !quote.data || quote.data === '0x') {
 				console.warn(`⚠️ Skipping ${token.symbol}: Invalid quote data`);
 				errors.push(`${token.symbol}: Invalid quote`);
+				failedTokens.push(token.symbol);
 				continue;
 			}
 			
@@ -220,16 +258,25 @@ async function executeBatchWithIndividualQuotes(
 			});
 			
 			totalOut += quote.amountOut;
+			successfulTokens.push(token.symbol);
 			
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : 'Unknown error';
 			console.error(`❌ Failed to prepare ${token.symbol}:`, msg);
 			errors.push(`${token.symbol}: ${msg}`);
+			failedTokens.push(token.symbol);
 		}
 	}
 	
 	if (calls.length === 0) {
-		throw new Error(`No valid swaps to execute. ${errors.join(' | ')}`);
+		return {
+			success: false,
+			txHashes: [],
+			error: `No valid swaps to execute. ${errors.join(' | ')}`,
+			totalSwapped: 0n,
+			estimatedOutput: 0n,
+			failedTokens
+		};
 	}
 	
 	console.log(`📤 Sending batch with ${calls.length} calls (approvals + swaps) on chain ${chainId}`);
@@ -257,22 +304,24 @@ async function executeBatchWithIndividualQuotes(
 		const txHash = (Array.isArray(result) ? result[0] : result) as `0x${string}`;
 		console.log('✅ Batch transaction submitted:', txHash);
 		
-		// Wait for confirmation
-		if (txHash && txHash.startsWith('0x')) {
+		// Wait for confirmation if we got a valid hash
+		if (txHash && typeof txHash === 'string' && txHash.startsWith('0x') && txHash.length === 66) {
 			try {
 				const receipt = await waitForTransactionReceipt(config, { hash: txHash, chainId: chainId as ChainId });
-				console.log('✅ Batch transaction confirmed:', receipt.status);
+				console.log('✅ Transaction confirmed:', receipt.status);
 			} catch (e) {
-				console.log('⏳ Could not wait for receipt (batch may use different confirmation)');
+				console.log('⏳ Could not wait for receipt (batch may use different confirmation flow)');
 			}
 		}
 		
 		return {
 			success: true,
 			txHashes: [txHash],
-			totalSwapped: tokens.reduce((sum, t) => sum + t.balance, 0n),
+			totalSwapped: tokens.filter(t => successfulTokens.includes(t.symbol)).reduce((sum, t) => sum + t.balance, 0n),
 			estimatedOutput: totalOut,
-			error: errors.length > 0 ? `Partial: ${errors.join(' | ')}` : undefined
+			error: errors.length > 0 ? `Partial: ${errors.join(' | ')}` : undefined,
+			successfulTokens,
+			failedTokens
 		};
 		
 	} catch (e: any) {
@@ -280,7 +329,13 @@ async function executeBatchWithIndividualQuotes(
 		
 		// If user rejected, don't fallback
 		if (e?.message?.includes('rejected') || e?.code === 4001 || e?.message?.includes('denied')) {
-			throw new Error('Transaction rejected by user');
+			return {
+				success: false,
+				txHashes: [],
+				error: 'Transaction rejected by user',
+				totalSwapped: 0n,
+				estimatedOutput: 0n
+			};
 		}
 		
 		console.log('🔄 Falling back to legacy sequential execution...');
@@ -298,6 +353,8 @@ async function executeLegacyBatch(
 	const txHashes: `0x${string}`[] = [];
 	let totalSwapped = 0n, totalOut = 0n;
 	const errors: string[] = [];
+	const successfulTokens: string[] = [];
+	const failedTokens: string[] = [];
 
 	console.log('🔧 Executing legacy batch for', tokens.length, 'tokens on chain', chainId);
 
@@ -337,6 +394,7 @@ async function executeLegacyBatch(
 				const errorMsg = 'Failed to get quote';
 				console.warn(`⚠️ Skipping ${token.symbol}: ${errorMsg}`);
 				errors.push(`${token.symbol}: ${errorMsg}`);
+				failedTokens.push(token.symbol);
 				continue;
 			}
 
@@ -344,6 +402,7 @@ async function executeLegacyBatch(
 				const errorMsg = quote.routeDescription || 'No route found';
 				console.warn(`⚠️ Skipping ${token.symbol}: ${errorMsg}`);
 				errors.push(`${token.symbol}: ${errorMsg}`);
+				failedTokens.push(token.symbol);
 				continue;
 			}
 
@@ -351,6 +410,7 @@ async function executeLegacyBatch(
 				const errorMsg = 'Invalid quote - no destination address';
 				console.warn(`⚠️ Skipping ${token.symbol}: ${errorMsg}`);
 				errors.push(`${token.symbol}: ${errorMsg}`);
+				failedTokens.push(token.symbol);
 				continue;
 			}
 
@@ -358,6 +418,7 @@ async function executeLegacyBatch(
 				const errorMsg = 'Invalid quote - no transaction data';
 				console.warn(`⚠️ Skipping ${token.symbol}: ${errorMsg}`);
 				errors.push(`${token.symbol}: ${errorMsg}`);
+				failedTokens.push(token.symbol);
 				continue;
 			}
 			
@@ -455,6 +516,7 @@ async function executeLegacyBatch(
 				
 				totalSwapped += token.balance;
 				totalOut += quote.amountOut;
+				successfulTokens.push(token.symbol);
 				
 				console.log(`✅ Successfully swapped ${token.symbol}`);
 				
@@ -472,18 +534,41 @@ async function executeLegacyBatch(
 			
 			// If user rejected, stop everything
 			if (msg.includes('rejected by user')) {
-				throw e;
+				return {
+					success: txHashes.length > 0,
+					txHashes,
+					totalSwapped,
+					estimatedOutput: totalOut,
+					error: msg,
+					successfulTokens,
+					failedTokens
+				};
 			}
 			
 			errors.push(`${token.symbol}: ${msg}`);
+			failedTokens.push(token.symbol);
 		}
 	}
 
 	if (txHashes.length === 0) {
 		if (errors.length > 0) {
-			throw new Error(`Execution Failed: ${errors.join(' | ')}`);
+			return {
+				success: false,
+				txHashes: [],
+				error: `Execution Failed: ${errors.join(' | ')}`,
+				totalSwapped: 0n,
+				estimatedOutput: 0n,
+				failedTokens
+			};
 		}
-		throw new Error("No liquid routes found for the selected tokens. Relay Protocol might have a minimum amount requirement (usually >$1).");
+		return {
+			success: false,
+			txHashes: [],
+			error: "No liquid routes found for the selected tokens. Relay Protocol might have a minimum amount requirement (usually >$1).",
+			totalSwapped: 0n,
+			estimatedOutput: 0n,
+			failedTokens
+		};
 	}
 
 	console.log('🏁 Batch execution complete:', {
@@ -498,7 +583,9 @@ async function executeLegacyBatch(
 		txHashes, 
 		totalSwapped, 
 		estimatedOutput: totalOut,
-		error: errors.length > 0 ? errors.join(' | ') : undefined
+		error: errors.length > 0 ? errors.join(' | ') : undefined,
+		successfulTokens,
+		failedTokens
 	};
 }
 

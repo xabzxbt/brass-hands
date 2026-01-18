@@ -2,7 +2,7 @@ import type { Token, ChainId, TokenFilter, HoldingsResponse } from '$lib/types';
 import { DUST_CONFIG, TAX_TOKEN_BLOCKLIST, ROUTESCAN_API_KEY, API_ENDPOINTS, TOKEN_ADDRESSES } from '$lib/config/constants';
 import { getBalance } from '@wagmi/core';
 import { config } from '$lib/config/wagmi';
-import { formatUnits, createPublicClient, http, erc20Abi, getAddress } from 'viem';
+import { formatUnits, createPublicClient, http, erc20Abi, getAddress, isAddress } from 'viem';
 import { mainnet, polygon, arbitrum, base, optimism, bsc } from 'viem/chains';
 import { checkRouteAvailable } from './solverService';
 
@@ -31,9 +31,19 @@ const KNOWN_TRANSFER_FEE_TOKENS: Record<number, Record<string, number>> = {
 	},
 };
 
+// FIX: LRU-like cache with size limit to prevent memory leaks
+const MAX_CACHE_SIZE = 1000;
 const transferFeeCache = new Map<string, boolean>();
 const relayPriceCache = new Map<string, { price: number | null; timestamp: number }>();
 const RELAY_PRICE_CACHE_TTL = 5 * 60 * 1000;
+
+// FIX: Cache cleanup function
+function cleanupCache<K, V>(cache: Map<K, V>, maxSize: number): void {
+	if (cache.size > maxSize) {
+		const keysToDelete = Array.from(cache.keys()).slice(0, cache.size - maxSize);
+		keysToDelete.forEach(key => cache.delete(key));
+	}
+}
 
 const PUBLIC_RPC_URLS: Record<number, string[]> = {
 	1: ['https://rpc.ankr.com/eth', 'https://eth.llamarpc.com'],
@@ -56,19 +66,33 @@ const getViemChain = (chainId: number) => {
 	}
 };
 
+// FIX: Cache public clients to avoid creating new instances
+const publicClientCache = new Map<number, ReturnType<typeof createPublicClient>>();
+
 const getPublicClient = (chainId: number) => {
+	if (publicClientCache.has(chainId)) {
+		return publicClientCache.get(chainId)!;
+	}
+	
 	const rpcUrl = PUBLIC_RPC_URLS[chainId]?.[0];
 	if (!rpcUrl) throw new Error(`No RPC configured for chain ${chainId}`);
 	
-	return createPublicClient({
+	const client = createPublicClient({
 		chain: getViemChain(chainId),
-		transport: http(rpcUrl, { batch: true }),
+		transport: http(rpcUrl, { batch: true, timeout: 30_000 }),
 		batch: { multicall: true },
 	});
+	
+	publicClientCache.set(chainId, client);
+	return client;
 };
 
 const getTokenLogoUrl = (chainId: number, tokenAddress: string): string => {
 	if (!tokenAddress) return '';
+	
+	// FIX: Validate address before processing
+	if (!isAddress(tokenAddress)) return '';
+	
 	const addr = tokenAddress.toLowerCase();
 	if (addr === ETH_PLACEHOLDER) return 'https://assets.coingecko.com/coins/images/279/small/ethereum.png';
 	
@@ -79,10 +103,13 @@ const getTokenLogoUrl = (chainId: number, tokenAddress: string): string => {
 	}
 
 	// Fallback to TrustWallet
-	const checksummed = getAddress(tokenAddress);
-	const trustWalletUrl = `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${getTrustWalletNetwork(chainId)}/assets/${checksummed}/logo.png`;
-	
-	return trustWalletUrl;
+	try {
+		const checksummed = getAddress(tokenAddress);
+		const trustWalletUrl = `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${getTrustWalletNetwork(chainId)}/assets/${checksummed}/logo.png`;
+		return trustWalletUrl;
+	} catch {
+		return '';
+	}
 };
 
 const getDuneNetworkSlug = (chainId: number): string | null => {
@@ -111,7 +138,9 @@ const getTrustWalletNetwork = (chainId: number): string => {
 };
 
 export const detectTransferFeeToken = async (chainId: number, tokenAddress: string): Promise<boolean> => {
-	if (!tokenAddress) return false;
+	// FIX: Better input validation
+	if (!tokenAddress || !isAddress(tokenAddress)) return false;
+	
 	const normalizedAddress = tokenAddress.toLowerCase();
 	if (normalizedAddress === '0x0000000000000000000000000000000000000000') return false;
 	
@@ -124,6 +153,7 @@ export const detectTransferFeeToken = async (chainId: number, tokenAddress: stri
 	if (knownFee !== undefined) {
 		const isFee = knownFee > 0;
 		transferFeeCache.set(cacheKey, isFee);
+		cleanupCache(transferFeeCache, MAX_CACHE_SIZE);
 		return isFee;
 	}
 
@@ -138,36 +168,69 @@ export const detectTransferFeeToken = async (chainId: number, tokenAddress: stri
 			allowFailure: true,
 		});
 		isFee = results.some(r => r.status === 'success' && r.result && BigInt(r.result as any) > 0n);
-	} catch { }
+	} catch (error) {
+		console.warn(`Failed to detect transfer fee for ${tokenAddress}:`, error);
+	}
 
 	transferFeeCache.set(cacheKey, isFee);
+	cleanupCache(transferFeeCache, MAX_CACHE_SIZE);
 	return isFee;
 };
 
 export const detectTransferFeeTokensBatch = async (chainId: number, addresses: string[]): Promise<Map<string, boolean>> => {
 	const results = new Map<string, boolean>();
-	const uncached = addresses.filter(addr => {
-		if (!addr) return false;
+	
+	// FIX: Filter invalid addresses first
+	const validAddresses = addresses.filter(addr => addr && isAddress(addr));
+	
+	const uncached = validAddresses.filter(addr => {
 		const norm = addr.toLowerCase();
-		if (norm === '0x0000000000000000000000000000000000000000') { results.set(norm, false); return false; }
-		if (transferFeeCache.has(`${chainId}-${norm}`)) { results.set(norm, transferFeeCache.get(`${chainId}-${norm}`)!); return false; }
+		if (norm === '0x0000000000000000000000000000000000000000') { 
+			results.set(norm, false); 
+			return false; 
+		}
+		const cacheKey = `${chainId}-${norm}`;
+		if (transferFeeCache.has(cacheKey)) { 
+			results.set(norm, transferFeeCache.get(cacheKey)!); 
+			return false; 
+		}
 		const known = KNOWN_TRANSFER_FEE_TOKENS[chainId]?.[norm];
-		if (known !== undefined) { const isFee = known > 0; transferFeeCache.set(`${chainId}-${norm}`, isFee); results.set(norm, isFee); return false; }
+		if (known !== undefined) { 
+			const isFee = known > 0; 
+			transferFeeCache.set(cacheKey, isFee); 
+			results.set(norm, isFee); 
+			return false; 
+		}
 		return true;
 	});
 
 	if (uncached.length) {
 		const client = getPublicClient(chainId);
-		const contracts = uncached.flatMap(addr => TRANSFER_FEE_FUNCTIONS.map(fn => ({ address: addr as `0x${string}`, abi: TRANSFER_FEE_ABI, functionName: fn })));
+		const contracts = uncached.flatMap(addr => 
+			TRANSFER_FEE_FUNCTIONS.map(fn => ({ 
+				address: addr as `0x${string}`, 
+				abi: TRANSFER_FEE_ABI, 
+				functionName: fn 
+			}))
+		);
+		
 		try {
 			const res = await client.multicall({ contracts, allowFailure: true });
 			uncached.forEach((addr, i) => {
-				const isFee = res.slice(i * 4, (i + 1) * 4).some(r => r.status === 'success' && r.result && BigInt(r.result as any) > 0n);
-				transferFeeCache.set(`${chainId}-${addr.toLowerCase()}`, isFee);
+				const isFee = res.slice(i * 4, (i + 1) * 4).some(r => 
+					r.status === 'success' && r.result && BigInt(r.result as any) > 0n
+				);
+				const cacheKey = `${chainId}-${addr.toLowerCase()}`;
+				transferFeeCache.set(cacheKey, isFee);
 				results.set(addr.toLowerCase(), isFee);
 			});
-		} catch { uncached.forEach(addr => results.set(addr.toLowerCase(), false)); }
+		} catch (error) {
+			console.warn('Batch transfer fee detection failed:', error);
+			uncached.forEach(addr => results.set(addr.toLowerCase(), false));
+		}
 	}
+	
+	cleanupCache(transferFeeCache, MAX_CACHE_SIZE);
 	return results;
 };
 
@@ -216,10 +279,35 @@ const getRouteScanNetwork = (chainId: number): string => {
 	}
 };
 
+// FIX: Helper for safe fetch with timeout and abort
+async function safeFetch(
+	url: string, 
+	options: RequestInit & { timeout?: number } = {}
+): Promise<Response> {
+	const { timeout = 30000, ...fetchOptions } = options;
+	const controller = new AbortController();
+	const timeoutId = setTimeout(() => controller.abort(), timeout);
+	
+	try {
+		const response = await fetch(url, {
+			...fetchOptions,
+			signal: controller.signal,
+		});
+		return response;
+	} finally {
+		clearTimeout(timeoutId);
+	}
+}
+
 export async function fetchHoldings(
 	address: string,
 	chainId: ChainId
 ): Promise<HoldingsResponse> {
+	// FIX: Validate address input
+	if (!address || !isAddress(address)) {
+		throw new Error('Invalid wallet address');
+	}
+	
 	try {
 		let allItems: any[] = [];
 		let nextToken: string | null = null;
@@ -237,7 +325,7 @@ export async function fetchHoldings(
 		for (const slug of slugsToTry) {
 			try {
 				const assetsUrl = `${apiBase}/network/${slug}/evm/${chainId}/address/${normalizedAddress}/assets?limit=${LIMIT}`;
-				const assetsRes = await fetch(assetsUrl, { headers });
+				const assetsRes = await safeFetch(assetsUrl, { headers, timeout: 15000 });
 				if (assetsRes.ok) {
 					const assetsData = await assetsRes.json();
 					if (assetsData.items?.length) {
@@ -247,7 +335,9 @@ export async function fetchHoldings(
 						break;
 					}
 				}
-			} catch (e) { console.warn(`Assets fetch failed for slug ${slug}`, e); }
+			} catch (e) { 
+				console.warn(`Assets fetch failed for slug ${slug}`, e); 
+			}
 		}
 
 		// Also try the dedicated /tokens endpoint if assets fails
@@ -255,7 +345,7 @@ export async function fetchHoldings(
 			for (const slug of slugsToTry) {
 				try {
 					const tokensUrl = `${apiBase}/network/${slug}/evm/${chainId}/address/${normalizedAddress}/tokens?limit=${LIMIT}`;
-					const tokensRes = await fetch(tokensUrl, { headers });
+					const tokensRes = await safeFetch(tokensUrl, { headers, timeout: 15000 });
 					if (tokensRes.ok) {
 						const tokensData = await tokensRes.json();
 						if (tokensData.items?.length) {
@@ -278,15 +368,19 @@ export async function fetchHoldings(
 					let url = `${apiBase}/network/${slug}/evm/${chainId}/address/${normalizedAddress}/erc20-holdings?limit=${LIMIT}`;
 					if (nextToken) url += `&next=${encodeURIComponent(nextToken)}`;
 
-					const response = await fetch(url, { headers });
-					if (!response.ok) break;
+					try {
+						const response = await safeFetch(url, { headers, timeout: 15000 });
+						if (!response.ok) break;
 
-					const data = await response.json();
-					const newItems = (data.items || []).filter((i: any) => !existingTokens.has((i.tokenAddress || i.contractAddress || i.address)?.toLowerCase()));
-					allItems.push(...newItems);
-					foundWithSlug = true;
-					nextToken = data.link?.nextToken;
-					if (!nextToken) break;
+						const data = await response.json();
+						const newItems = (data.items || []).filter((i: any) => !existingTokens.has((i.tokenAddress || i.contractAddress || i.address)?.toLowerCase()));
+						allItems.push(...newItems);
+						foundWithSlug = true;
+						nextToken = data.link?.nextToken;
+						if (!nextToken) break;
+					} catch {
+						break;
+					}
 				}
 				if (foundWithSlug) break;
 			}
@@ -297,7 +391,7 @@ export async function fetchHoldings(
 			for (const slug of slugsToTry) {
 				// Get ALL token transfers to find hidden tokens
 				const txUrl = `${apiBase}/network/${slug}/evm/${chainId}/etherscan/api?module=account&action=tokentx&address=${normalizedAddress}&startblock=0&endblock=99999999&sort=desc&apikey=${ROUTESCAN_API_KEY || ''}`;
-				const txRes = await fetch(txUrl);
+				const txRes = await safeFetch(txUrl, { timeout: 15000 });
 				if (txRes.ok) {
 					const txData = await txRes.json();
 					if (txData.status === '1' && Array.isArray(txData.result)) {
@@ -317,9 +411,11 @@ export async function fetchHoldings(
 					}
 				}
 			}
-		} catch (e) { console.warn('Token discovery fallback failed', e); }
+		} catch (e) { 
+			console.warn('Token discovery fallback failed', e); 
+		}
 
-		// 3. Force-add popular tokens for the chain to ensure they are checked
+		// 4. Force-add popular tokens for the chain to ensure they are checked
 		const popular = TOKEN_ADDRESSES[chainId as keyof typeof TOKEN_ADDRESSES] as Record<string, string>;
 		if (popular) {
 			const existingTokens = new Set(allItems.map(i => (i.tokenAddress || i.contractAddress || i.address)?.toLowerCase()));
@@ -330,7 +426,10 @@ export async function fetchHoldings(
 			});
 		}
 
-		const filtered = allItems.filter(item => !!(item.tokenAddress || item.contractAddress || item.address));
+		const filtered = allItems.filter(item => {
+			const addr = item.tokenAddress || item.contractAddress || item.address;
+			return addr && isAddress(addr);
+		});
 
 		if (!filtered.length) {
 			const native = await fetchNativeBalance(address as `0x${string}`, chainId);
@@ -339,43 +438,51 @@ export async function fetchHoldings(
 		}
 
 		const publicClient = getPublicClient(chainId);
+		
+		// FIX: Build metadata calls more safely
+		const tokensNeedingMetadata: typeof filtered = [];
 		const metadataCalls: any[] = [];
+		
 		filtered.forEach(item => {
+			const addr = item.tokenAddress || item.contractAddress || item.address;
 			if (!item.tokenSymbol || !item.tokenDecimals) {
-				metadataCalls.push({ address: item.tokenAddress, abi: erc20Abi, functionName: 'symbol' });
-				metadataCalls.push({ address: item.tokenAddress, abi: erc20Abi, functionName: 'name' });
-				metadataCalls.push({ address: item.tokenAddress, abi: erc20Abi, functionName: 'decimals' });
+				tokensNeedingMetadata.push(item);
+				metadataCalls.push({ address: addr as `0x${string}`, abi: erc20Abi, functionName: 'symbol' });
+				metadataCalls.push({ address: addr as `0x${string}`, abi: erc20Abi, functionName: 'name' });
+				metadataCalls.push({ address: addr as `0x${string}`, abi: erc20Abi, functionName: 'decimals' });
 			}
 		});
 
-		const metadataResults = metadataCalls.length ? await publicClient.multicall({ contracts: metadataCalls, allowFailure: true }).catch(() => []) : [];
-		let mIdx = 0;
+		const metadataResults = metadataCalls.length 
+			? await publicClient.multicall({ contracts: metadataCalls, allowFailure: true }).catch(() => []) 
+			: [];
+		
+		// FIX: Map metadata results back to tokens correctly
+		const metadataMap = new Map<string, { symbol: string; name: string; decimals: number }>();
+		tokensNeedingMetadata.forEach((item, idx) => {
+			const addr = (item.tokenAddress || item.contractAddress || item.address).toLowerCase();
+			const baseIdx = idx * 3;
+			metadataMap.set(addr, {
+				symbol: (metadataResults[baseIdx]?.result as string) || 'UNKNOWN',
+				name: (metadataResults[baseIdx + 1]?.result as string) || 'Unknown Token',
+				decimals: Number(metadataResults[baseIdx + 2]?.result || 18),
+			});
+		});
+		
 		const enriched = filtered.map(item => {
 			const tokenAddress = item.tokenAddress || item.contractAddress || item.address;
-			const tokenSymbol = item.tokenSymbol || item.symbol || item.token_symbol || 'UNKNOWN';
-			const tokenName = item.tokenName || item.name || item.token_name || tokenSymbol;
-			const tokenDecimals = Number(item.tokenDecimals || item.decimals || item.token_decimals || 18);
+			const normalizedAddr = tokenAddress.toLowerCase();
+			const metadata = metadataMap.get(normalizedAddr);
+			
+			const tokenSymbol = item.tokenSymbol || item.symbol || item.token_symbol || metadata?.symbol || 'UNKNOWN';
+			const tokenName = item.tokenName || item.name || item.token_name || metadata?.name || tokenSymbol;
+			const tokenDecimals = Number(item.tokenDecimals || item.decimals || item.token_decimals || metadata?.decimals || 18);
 
 			// Anti-Spam Filtering Logic (Symbol/Name/Decimals checks)
 			const spamPatterns = [/visit/i, /claim/i, /free/i, /gift/i, /reward/i, /voucher/i, /airdrop/i, /http/i, /\.com/i, /\.io/i, /\.net/i, /\.org/i, /www\./i];
 			const isSpamPattern = spamPatterns.some(p => p.test(tokenName) || p.test(tokenSymbol)) || tokenSymbol.length > 12;
 			const isInvalidDecimals = tokenDecimals === 0 || tokenDecimals > 30;
 
-			if (!item.tokenSymbol || !item.tokenDecimals) {
-				const symbol = (metadataResults[mIdx++]?.result as string) || 'UNKNOWN';
-				const name = (metadataResults[mIdx++]?.result as string) || symbol;
-				const decimals = Number(metadataResults[mIdx++]?.result || 18);
-				
-				return { 
-					...item, 
-					tokenAddress,
-					tokenSymbol: symbol, 
-					tokenName: name, 
-					tokenDecimals: decimals,
-					isSpamPattern: isSpamPattern || symbol.length > 12,
-					isInvalidDecimals: decimals === 0 || decimals > 30
-				};
-			}
 			return {
 				...item,
 				tokenAddress,
@@ -400,7 +507,7 @@ export async function fetchHoldings(
 					args: [address] 
 				})),
 				allowFailure: true,
-			}).catch(() => batch.map(() => ({ status: 'failure' })));
+			}).catch(() => batch.map(() => ({ status: 'failure' as const })));
 			balances.push(...results);
 		}
 
@@ -432,16 +539,24 @@ export async function fetchHoldings(
 		}).filter(t => t.balance > 0n);
 
 		// Parallel check for liquid routes for tokens that pass basic spam filter
-		const liquidCheckResults = await Promise.all(
-			holdingsRaw.map(async (t) => {
-				// Don't check route if it's already a clear spam or very low value
-				if (t.isSpamPattern || t.isInvalidDecimals || t.valueUsd < 0.0001) {
-					return false;
-				}
-				// Check route availability with the actual balance for accuracy
-				return await checkRouteAvailable(chainId, t.tokenAddress, targetToken, address, t.decimals, t.balance);
-			})
-		);
+		// FIX: Limit concurrent route checks to avoid rate limiting
+		const CONCURRENT_ROUTE_CHECKS = 5;
+		const liquidCheckResults: boolean[] = [];
+		
+		for (let i = 0; i < holdingsRaw.length; i += CONCURRENT_ROUTE_CHECKS) {
+			const batch = holdingsRaw.slice(i, i + CONCURRENT_ROUTE_CHECKS);
+			const batchResults = await Promise.all(
+				batch.map(async (t) => {
+					// Don't check route if it's already a clear spam or very low value
+					if (t.isSpamPattern || t.isInvalidDecimals || t.valueUsd < 0.0001) {
+						return false;
+					}
+					// Check route availability with the actual balance for accuracy
+					return await checkRouteAvailable(chainId, t.tokenAddress, targetToken, address, t.decimals, t.balance);
+				})
+			);
+			liquidCheckResults.push(...batchResults);
+		}
 
 		const verified = holdingsRaw.map((item, i): Token | null => {
 			const isLiquid = liquidCheckResults[i];
@@ -455,12 +570,25 @@ export async function fetchHoldings(
 			// Hide only absolute zero-value dust (<0.0001 USD)
 			if (hasValue && item.valueUsd < 0.0001) return null;
 
+			// FIX: Safely create checksummed address
+			let checksummedAddress: `0x${string}`;
+			try {
+				checksummedAddress = getAddress(item.tokenAddress);
+			} catch {
+				return null; // Skip invalid addresses
+			}
+
 			return {
-				address: getAddress(item.tokenAddress), chainId,
-				symbol: item.tokenSymbol, name: item.tokenName || item.tokenSymbol, decimals: item.decimals,
+				address: checksummedAddress, 
+				chainId,
+				symbol: item.tokenSymbol, 
+				name: item.tokenName || item.tokenSymbol, 
+				decimals: item.decimals,
 				logoUrl: getTokenLogoUrl(chainId, item.tokenAddress),
-				balance: item.balance, balanceFormatted: formatBalance(item.balance.toString(), item.decimals),
-				priceUsd: item.priceUsd, valueUsd: item.valueUsd,
+				balance: item.balance, 
+				balanceFormatted: formatBalance(item.balance.toString(), item.decimals),
+				priceUsd: item.priceUsd, 
+				valueUsd: item.valueUsd,
 				isTaxToken: item.isTaxToken,
 				riskLevel: assessRiskLevel(item.tokenSymbol, item.valueUsd, item.isTaxToken),
 				isLiquid: isLiquid !== false
@@ -506,7 +634,7 @@ function createNativeToken(chainId: ChainId, nativeResult: { balance: bigint; va
 		logoUrl: getNativeLogo(chainId),
 		balance: nativeResult.balance,
 		balanceFormatted: formatUnits(nativeResult.balance, 18),
-		priceUsd: nativeResult.valueUsd > 0
+		priceUsd: nativeResult.valueUsd > 0 && nativeResult.balance > 0n
 			? nativeResult.valueUsd / Number(formatUnits(nativeResult.balance, 18))
 			: 0,
 		valueUsd: nativeResult.valueUsd,
@@ -558,14 +686,18 @@ function assessRiskLevel(symbol: string, valueUsd: number, isTaxToken: boolean):
 
 function formatBalance(balance: string, decimals: number): string {
 	if (!balance) return '0';
-	const normalized = formatUnits(BigInt(balance), decimals);
-	const num = Number(normalized);
-	if (!Number.isFinite(num) || num === 0) return '0';
-	if (num < 0.0001) return '<0.0001';
-	if (num < 1) return num.toFixed(4);
-	if (num < 1000) return num.toFixed(2);
-	if (num < 1000000) return (num / 1000).toFixed(2) + 'K';
-	return (num / 1000000).toFixed(2) + 'M';
+	try {
+		const normalized = formatUnits(BigInt(balance), decimals);
+		const num = Number(normalized);
+		if (!Number.isFinite(num) || num === 0) return '0';
+		if (num < 0.0001) return '<0.0001';
+		if (num < 1) return num.toFixed(4);
+		if (num < 1000) return num.toFixed(2);
+		if (num < 1000000) return (num / 1000).toFixed(2) + 'K';
+		return (num / 1000000).toFixed(2) + 'M';
+	} catch {
+		return '0';
+	}
 }
 
 export function filterDustTokens(tokens: Token[], filter?: Partial<TokenFilter>): Token[] {

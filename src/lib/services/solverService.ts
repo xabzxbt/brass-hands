@@ -1,5 +1,6 @@
 import type { Token, ChainId, SwapQuote, QuoteResponse } from '$lib/types';
 import { RELAY_API_KEY, TOKEN_ADDRESSES, type TargetToken } from '$lib/config/constants';
+import { isAddress } from 'viem';
 
 const RELAY_API_BASE = 'https://api.relay.link';
 
@@ -31,7 +32,32 @@ function isNativeToken(address: string): boolean {
 	return addr === ETH_PLACEHOLDER || addr === NATIVE_TOKEN_ADDRESS || addr === '';
 }
 
+// FIX: Safe fetch with timeout
+async function safeFetch(
+	url: string, 
+	options: RequestInit & { timeout?: number } = {}
+): Promise<Response> {
+	const { timeout = 30000, ...fetchOptions } = options;
+	const controller = new AbortController();
+	const timeoutId = setTimeout(() => controller.abort(), timeout);
+	
+	try {
+		const response = await fetch(url, {
+			...fetchOptions,
+			signal: controller.signal,
+		});
+		return response;
+	} finally {
+		clearTimeout(timeoutId);
+	}
+}
+
 export async function getQuote(request: QuoteRequest): Promise<QuoteResponse> {
+	// FIX: Validate inputs
+	if (!request.tokenIn.address || !isAddress(request.tokenIn.address)) {
+		return { ...createEmptyQuote(request), isLiquid: false, routeDescription: 'Invalid token address' };
+	}
+	
 	const realQuote = await fetchRelayQuote(request);
 	return realQuote || { ...createEmptyQuote(request), isLiquid: false };
 }
@@ -64,10 +90,11 @@ export async function getMultiInputQuote(requests: QuoteRequest[]): Promise<Quot
 
 		console.log('🔄 Multi-Input Quote Request:', JSON.stringify(payload, null, 2));
 
-		const response = await fetch(`${RELAY_API_BASE}/execute/swap/multi-input`, {
+		const response = await safeFetch(`${RELAY_API_BASE}/execute/swap/multi-input`, {
 			method: 'POST',
 			headers,
-			body: JSON.stringify(payload)
+			body: JSON.stringify(payload),
+			timeout: 30000
 		});
 
 		if (!response.ok) {
@@ -264,10 +291,11 @@ async function fetchRelayQuote(request: QuoteRequest): Promise<QuoteResponse | n
 
 		console.log('🔄 Quote Request:', JSON.stringify(payload, null, 2));
 
-		const response = await fetch(`${RELAY_API_BASE}/quote`, {
+		const response = await safeFetch(`${RELAY_API_BASE}/quote`, {
 			method: 'POST',
 			headers,
-			body: JSON.stringify(payload)
+			body: JSON.stringify(payload),
+			timeout: 15000
 		});
 
 		if (!response.ok) {
@@ -285,30 +313,23 @@ async function fetchRelayQuote(request: QuoteRequest): Promise<QuoteResponse | n
 		// Extract transaction data from steps
 		const txData = extractTransactionFromSteps(data.steps);
 		if (!txData) {
-			console.warn('⚠️ No transaction data in quote response');
-			return { ...createEmptyQuote(request), isLiquid: false, routeDescription: 'No executable route' };
+			console.warn('⚠️ No transaction data found in response');
+			return { ...createEmptyQuote(request), isLiquid: false, routeDescription: 'No transaction data' };
 		}
 
-		// Find approval step if exists
-		const approvalStep = data.steps.find(s => s.id === 'approval');
-		let spender = txData.to;
-		
-		if (approvalStep && approvalStep.items && approvalStep.items.length > 0) {
-			const approvalItem = approvalStep.items[0];
-			if (approvalItem.data?.to) {
-				spender = approvalItem.data.to;
+		// Get spender from the approval step if available
+		let spender: `0x${string}` = txData.to;
+		for (const step of data.steps || []) {
+			if (step.id === 'approve' && step.items?.[0]?.spender) {
+				spender = step.items[0].spender;
+				break;
 			}
 		}
 
 		const amountOut = BigInt(data.details?.currencyOut?.amount || '0');
 		const priceImpact = parseFloat(data.details?.totalImpact?.percent || data.details?.swapImpact?.percent || '0');
 		const gasEstimate = parseFloat(data.fees?.gas?.amountUsd || '0');
-
-		// Determine route description
-		let routeDescription = 'Relay';
-		if (data.details?.operation) {
-			routeDescription = data.details.operation.charAt(0).toUpperCase() + data.details.operation.slice(1);
-		}
+		const routeDescription = data.details?.operation || 'Relay Solver';
 
 		return {
 			inAmount: amountIn,
@@ -367,19 +388,28 @@ function createEmptyQuote(request: QuoteRequest): QuoteResponse {
 }
 
 export async function getMultipleQuotes(requests: QuoteRequest[]): Promise<QuoteResponse[]> {
-	if (RELAY_API_KEY) {
-		// With API key, we can parallelize more aggressively (10 req/sec)
-		const results = await Promise.all(requests.map(req => getQuote(req)));
-		return results;
-	}
-
-	const results: QuoteResponse[] = [];
-	const delay = 1500; // No API key, be very conservative
+	if (requests.length === 0) return [];
 	
-	for (const req of requests) {
-		results.push(await getQuote(req));
-		if (requests.indexOf(req) < requests.length - 1) await new Promise(r => setTimeout(r, delay));
+	// FIX: Better rate limiting with exponential backoff
+	const hasApiKey = !!RELAY_API_KEY;
+	const BATCH_SIZE = hasApiKey ? 5 : 2;
+	const BASE_DELAY = hasApiKey ? 200 : 1500;
+	
+	const results: QuoteResponse[] = [];
+	
+	for (let i = 0; i < requests.length; i += BATCH_SIZE) {
+		const batch = requests.slice(i, i + BATCH_SIZE);
+		
+		// Process batch in parallel
+		const batchResults = await Promise.all(batch.map(req => getQuote(req)));
+		results.push(...batchResults);
+		
+		// Delay between batches
+		if (i + BATCH_SIZE < requests.length) {
+			await new Promise(r => setTimeout(r, BASE_DELAY));
+		}
 	}
+	
 	return results;
 }
 
@@ -392,6 +422,10 @@ export async function checkRouteAvailable(
 	decimals: number = 18,
 	amount?: bigint
 ): Promise<boolean> {
+	// FIX: Validate inputs
+	if (!tokenAddress || !isAddress(tokenAddress)) return false;
+	if (!userAddress || !isAddress(userAddress)) return false;
+	
 	try {
 		// Use provided amount or a small test amount
 		const testAmount = amount 
@@ -417,10 +451,11 @@ export async function checkRouteAvailable(
 			usePermit: false
 		};
 
-		const response = await fetch(`${RELAY_API_BASE}/quote`, {
+		const response = await safeFetch(`${RELAY_API_BASE}/quote`, {
 			method: 'POST',
 			headers,
-			body: JSON.stringify(payload)
+			body: JSON.stringify(payload),
+			timeout: 10000
 		});
 
 		if (!response.ok) {
@@ -440,9 +475,14 @@ export function calculatePriceImpact(
 	priceIn: number,
 	priceOut: number
 ): number {
+	// FIX: Handle edge cases
+	if (amountIn === 0n || priceIn === 0) return 0;
+	
 	const inValue = Number(amountIn) * priceIn;
 	const outValue = Number(amountOut) * priceOut;
 
+	if (inValue === 0) return 0;
+	
 	const impact = ((inValue - outValue) / inValue) * 100;
 
 	return Math.max(0, impact);

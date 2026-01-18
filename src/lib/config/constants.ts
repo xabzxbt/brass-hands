@@ -1,10 +1,20 @@
-export const REOWN_PROJECT_ID = import.meta.env.VITE_PROJECT_ID;
-export const RELAY_API_KEY = import.meta.env.VITE_RELAY_API_KEY;
-export const ROUTESCAN_API_KEY = import.meta.env.VITE_ROUTESCAN_API_KEY;
-export const COVALENT_API_KEY = import.meta.env.VITE_COVALENT_API_KEY;
+// FIX: Safe access to env variables with fallbacks
+export const REOWN_PROJECT_ID = import.meta.env.VITE_PROJECT_ID || '';
+export const RELAY_API_KEY = import.meta.env.VITE_RELAY_API_KEY || '';
+export const ROUTESCAN_API_KEY = import.meta.env.VITE_ROUTESCAN_API_KEY || '';
+export const COVALENT_API_KEY = import.meta.env.VITE_COVALENT_API_KEY || '';
 
-if (!REOWN_PROJECT_ID || !RELAY_API_KEY) {
-	console.warn('⚠️ Missing environment variables. Please check your .env file.');
+// FIX: More helpful warning messages
+if (!REOWN_PROJECT_ID) {
+	console.warn('⚠️ Missing VITE_PROJECT_ID. Wallet connection will not work. Please check your .env file.');
+}
+
+if (!RELAY_API_KEY) {
+	console.warn('⚠️ Missing VITE_RELAY_API_KEY. Swap functionality will be rate-limited.');
+}
+
+if (!ROUTESCAN_API_KEY) {
+	console.warn('⚠️ Missing VITE_ROUTESCAN_API_KEY. Token scanning may be limited.');
 }
 
 if (!COVALENT_API_KEY) {
@@ -28,7 +38,16 @@ export const DUST_CONFIG = {
 
 export type TargetToken = 'ETH' | 'USDC' | 'DAI';
 
-export const TOKEN_ADDRESSES = {
+// FIX: Add type for chain-specific token addresses
+export type ChainTokenAddresses = {
+	WETH: string;
+	USDC: string;
+	USDT?: string;
+	DAI: string;
+	USDbC?: string;
+};
+
+export const TOKEN_ADDRESSES: Record<number, ChainTokenAddresses> = {
 	1: {
 		WETH: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
 		USDC: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
@@ -67,6 +86,17 @@ export const TOKEN_ADDRESSES = {
 	}
 } as const;
 
-export const TAX_TOKEN_BLOCKLIST = new Set([
-	'0x000000000000000000000000000000000000DEAD',
+// FIX: Use Map for better performance and type safety
+export const TAX_TOKEN_BLOCKLIST = new Set<string>([
+	'0x000000000000000000000000000000000000dead',
 ]);
+
+// FIX: Add helper function to check if address is in blocklist
+export function isBlocklistedToken(address: string): boolean {
+	return TAX_TOKEN_BLOCKLIST.has(address.toLowerCase());
+}
+
+// FIX: Add helper to get token addresses for a chain
+export function getChainTokenAddresses(chainId: number): ChainTokenAddresses | undefined {
+	return TOKEN_ADDRESSES[chainId];
+}
