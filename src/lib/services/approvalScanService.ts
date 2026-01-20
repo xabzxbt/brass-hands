@@ -109,7 +109,9 @@ export async function getTokenApprovals(
 	}
 
 	// Use query parameter for authentication as it's more reliable with Covalent
-	const url = `${COVALENT_BASE_URL}/${chainName}/approvals/${walletAddress}/?key=${COVALENT_API_KEY}`;
+	// Ensure address is lowercase for consistent API matching
+	const addr = walletAddress.toLowerCase();
+	const url = `${COVALENT_BASE_URL}/${chainName}/approvals/${addr}/?key=${COVALENT_API_KEY}`;
 
 	try {
 		console.log(`🔍 Scanning token approvals on ${chainName}...`);
@@ -156,7 +158,8 @@ export async function getNftApprovals(
 	}
 
 	// Use query parameter for authentication
-	const url = `${COVALENT_BASE_URL}/${chainName}/nft/approvals/${walletAddress}/?key=${COVALENT_API_KEY}`;
+	const addr = walletAddress.toLowerCase();
+	const url = `${COVALENT_BASE_URL}/${chainName}/nft/approvals/${addr}/?key=${COVALENT_API_KEY}`;
 
 	try {
 		console.log(`🔍 Scanning NFT approvals on ${chainName}...`);
