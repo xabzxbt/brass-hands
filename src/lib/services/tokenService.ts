@@ -1,3 +1,4 @@
+// Token Service for Brass Hands
 import type { Token, ChainId, TokenFilter, HoldingsResponse } from '$lib/types';
 import { DUST_CONFIG, TAX_TOKEN_BLOCKLIST, ROUTESCAN_API_KEY, API_ENDPOINTS, TOKEN_ADDRESSES } from '$lib/config/constants';
 import { getBalance } from '@wagmi/core';
@@ -78,7 +79,7 @@ const getPublicClient = (chainId: number) => {
 	if (!rpcUrl) throw new Error(`No RPC configured for chain ${chainId}`);
 	
 	const client = createPublicClient({
-		chain: getViemChain(chainId),
+		chain: getViemChain(chainId) as any,
 		transport: http(rpcUrl, { batch: true, timeout: 30_000 }),
 		batch: { multicall: true },
 	});
