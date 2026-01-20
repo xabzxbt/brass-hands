@@ -104,33 +104,40 @@ export async function getTokenApprovals(
 	const chainName = COVALENT_CHAIN_NAMES[chainId];
 	
 	if (!chainName) {
+		console.warn(`⚠️ No Covalent chain name mapping for chain ID: ${chainId}`);
 		return [];
 	}
 
-	const url = `${COVALENT_BASE_URL}/${chainName}/approvals/${walletAddress}/`;
+	// Use query parameter for authentication as it's more reliable with Covalent
+	const url = `${COVALENT_BASE_URL}/${chainName}/approvals/${walletAddress}/?key=${COVALENT_API_KEY}`;
 
 	try {
+		console.log(`🔍 Scanning token approvals on ${chainName}...`);
 		const response = await fetch(url, {
 			method: 'GET',
 			headers: {
-				'Content-Type': 'application/json',
-				'Authorization': `Bearer ${COVALENT_API_KEY}`
+				'Content-Type': 'application/json'
 			}
 		});
 
 		if (!response.ok) {
+			const errorText = await response.text();
+			console.error(`❌ Covalent API error (${response.status}):`, errorText);
 			throw new Error(`Covalent API error: ${response.status} ${response.statusText}`);
 		}
 
 		const data: CovalentApprovalsResponse = await response.json();
 
 		if (data.error) {
+			console.error(`❌ Covalent business error:`, data.error_message);
 			throw new Error(data.error_message || 'Unknown Covalent API error');
 		}
 
-		return data.data.items.map(item => transformTokenApproval(item));
+		const items = data.data?.items || [];
+		console.log(`✅ Found ${items.length} token approvals on ${chainName}`);
+		return items.map(item => transformTokenApproval(item));
 	} catch (error) {
-		console.error(`Failed to fetch token approvals on ${chainName}:`, error);
+		console.error(`❌ Failed to fetch token approvals on ${chainName}:`, error);
 		throw error;
 	}
 }
@@ -148,30 +155,33 @@ export async function getNftApprovals(
 		return [];
 	}
 
-	const url = `${COVALENT_BASE_URL}/${chainName}/nft/approvals/${walletAddress}/`;
+	// Use query parameter for authentication
+	const url = `${COVALENT_BASE_URL}/${chainName}/nft/approvals/${walletAddress}/?key=${COVALENT_API_KEY}`;
 
 	try {
+		console.log(`🔍 Scanning NFT approvals on ${chainName}...`);
 		const response = await fetch(url, {
 			method: 'GET',
 			headers: {
-				'Content-Type': 'application/json',
-				'Authorization': `Bearer ${COVALENT_API_KEY}`
+				'Content-Type': 'application/json'
 			}
 		});
 
 		if (!response.ok) {
-			throw new Error(`Covalent API error: ${response.status} ${response.statusText}`);
+			// Silent fail for NFTs as they are secondary
+			return [];
 		}
 
 		const data: CovalentNftApprovalsResponse = await response.json();
 
 		if (data.error) {
-			throw new Error(data.error_message || 'Unknown Covalent API error');
+			return [];
 		}
 
+		const items = data.data?.items || [];
 		const nftApprovals: NftApproval[] = [];
 		
-		for (const item of data.data.items) {
+		for (const item of items) {
 			for (const spender of item.spenders) {
 				nftApprovals.push({
 					contractAddress: item.contract_address as `0x${string}`,
@@ -185,10 +195,11 @@ export async function getNftApprovals(
 			}
 		}
 
+		console.log(`✅ Found ${nftApprovals.length} NFT approvals on ${chainName}`);
 		return nftApprovals;
 	} catch (error) {
-		console.error(`Failed to fetch NFT approvals on ${chainName}:`, error);
-		throw error;
+		// Silent fail for NFTs
+		return [];
 	}
 }
 
