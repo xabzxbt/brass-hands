@@ -35,11 +35,8 @@ export async function estimateGasCostUsd(
 		const costInNative = Number(formatUnits(estimatedGas * gasPrice, 18));
 		const totalCostUsd = costInNative * nativePrice;
 
-		console.log(`⛽ Gas Est [${chainId}]: ${tokenCount} tokens = ${totalCostUsd.toFixed(4)} USD`);
-
 		return totalCostUsd;
 	} catch (error) {
-		console.error('❌ Gas estimation failed:', error);
 		return 0;
 	}
 }

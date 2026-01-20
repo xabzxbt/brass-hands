@@ -168,8 +168,8 @@ export const detectTransferFeeToken = async (chainId: number, tokenAddress: stri
 			allowFailure: true,
 		});
 		isFee = results.some(r => r.status === 'success' && r.result && BigInt(r.result as any) > 0n);
-	} catch (error) {
-		console.warn(`Failed to detect transfer fee for ${tokenAddress}:`, error);
+	} catch {
+		// Silent fail
 	}
 
 	transferFeeCache.set(cacheKey, isFee);
@@ -225,7 +225,6 @@ export const detectTransferFeeTokensBatch = async (chainId: number, addresses: s
 				results.set(addr.toLowerCase(), isFee);
 			});
 		} catch (error) {
-			console.warn('Batch transfer fee detection failed:', error);
 			uncached.forEach(addr => results.set(addr.toLowerCase(), false));
 		}
 	}
@@ -336,7 +335,7 @@ export async function fetchHoldings(
 					}
 				}
 			} catch (e) { 
-				console.warn(`Assets fetch failed for slug ${slug}`, e); 
+				// Silent fail
 			}
 		}
 
@@ -412,7 +411,7 @@ export async function fetchHoldings(
 				}
 			}
 		} catch (e) { 
-			console.warn('Token discovery fallback failed', e); 
+			// Silent fail
 		}
 
 		// 4. Force-add popular tokens for the chain to ensure they are checked
@@ -603,7 +602,6 @@ export async function fetchHoldings(
 
 		return { address, chainId, tokens: all, totalValueUsd: all.reduce((sum, t) => sum + t.valueUsd, 0), scannedAt: Date.now() };
 	} catch (error) {
-		console.error('❌ Fetch failed:', error);
 		throw error;
 	}
 }
@@ -705,6 +703,30 @@ export function filterDustTokens(tokens: Token[], filter?: Partial<TokenFilter>)
 		minValueUsd: filter?.minValueUsd ?? DUST_CONFIG.MIN_VALUE,
 		maxValueUsd: filter?.maxValueUsd ?? DUST_CONFIG.MAX_VALUE,
 		excludeTaxTokens: filter?.excludeTaxTokens ?? false, // Show tax tokens by default but maybe with label
+		allowedRiskLevels: filter?.allowedRiskLevels ?? ['LOW', 'MEDIUM', 'HIGH']
+	};
+
+	return tokens.filter((token) => {
+		const inValueRange =
+			token.valueUsd >= filterConfig.minValueUsd && token.valueUsd <= filterConfig.maxValueUsd;
+		if (!inValueRange) return false;
+
+		if (filterConfig.excludeTaxTokens) {
+			if (token.isTaxToken) return false;
+			if (TAX_TOKEN_BLOCKLIST.has(token.address.toLowerCase())) return false;
+		}
+
+		if (!filterConfig.allowedRiskLevels.includes(token.riskLevel)) return false;
+
+		return true;
+	});
+}
+
+export function filterDustTokens(tokens: Token[], filter?: Partial<TokenFilter>): Token[] {
+	const filterConfig: TokenFilter = {
+		minValueUsd: filter?.minValueUsd ?? DUST_CONFIG.MIN_VALUE,
+		maxValueUsd: filter?.maxValueUsd ?? DUST_CONFIG.MAX_VALUE,
+		excludeTaxTokens: filter?.excludeTaxTokens ?? false,
 		allowedRiskLevels: filter?.allowedRiskLevels ?? ['LOW', 'MEDIUM', 'HIGH']
 	};
 

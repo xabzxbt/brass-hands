@@ -84,7 +84,6 @@
 				// Wait a bit for the chain switch to complete
 				await new Promise(resolve => setTimeout(resolve, 1000));
 			} catch (error) {
-				console.error('Failed to switch chain:', error);
 				alert(`Please switch your wallet to ${CHAIN_INFO[selectedChainForRevoke].name} to revoke approvals on that network.`);
 				return;
 			}
@@ -103,7 +102,6 @@
 				// Wait a bit for the chain switch to complete
 				await new Promise(resolve => setTimeout(resolve, 1000));
 			} catch (error) {
-				console.error('Failed to switch chain:', error);
 				alert(`Please switch your wallet to ${CHAIN_INFO[item.chainId].name} to revoke this approval.`);
 				return;
 			}

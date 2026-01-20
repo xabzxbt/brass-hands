@@ -4,23 +4,6 @@ export const RELAY_API_KEY = import.meta.env.VITE_RELAY_API_KEY || '';
 export const ROUTESCAN_API_KEY = import.meta.env.VITE_ROUTESCAN_API_KEY || '';
 export const COVALENT_API_KEY = import.meta.env.VITE_COVALENT_API_KEY || '';
 
-// FIX: More helpful warning messages
-if (!REOWN_PROJECT_ID) {
-	console.warn('⚠️ Missing VITE_PROJECT_ID. Wallet connection will not work. Please check your .env file.');
-}
-
-if (!RELAY_API_KEY) {
-	console.warn('⚠️ Missing VITE_RELAY_API_KEY. Swap functionality will be rate-limited.');
-}
-
-if (!ROUTESCAN_API_KEY) {
-	console.warn('⚠️ Missing VITE_ROUTESCAN_API_KEY. Token scanning may be limited.');
-}
-
-if (!COVALENT_API_KEY) {
-	console.warn('⚠️ Missing VITE_COVALENT_API_KEY. Revoke feature will not work.');
-}
-
 export const API_ENDPOINTS = {
 	ROUTESCAN: 'https://api.routescan.io/v2',
 	DUNE: 'https://api.dune.com/api/v1',

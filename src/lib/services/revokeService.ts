@@ -111,8 +111,6 @@ export async function executeBatchRevoke(
 	chainId: ChainId,
 	onProgress?: (current: number, total: number) => void
 ): Promise<RevokeBatchResult> {
-	console.log(`🔒 Starting batch revoke for ${items.length} approvals on chain ${chainId}`);
-
 	const calls: Array<{ to: `0x${string}`; data: `0x${string}`; value: bigint }> = [];
 	const errors: string[] = [];
 
@@ -126,12 +124,9 @@ export async function executeBatchRevoke(
 			} else {
 				tx = buildRevokeNFTTx(item.tokenAddress, item.spenderAddress);
 			}
-
 			calls.push(tx);
-			console.log(`📝 Added revoke for ${item.tokenSymbol} -> ${item.spenderLabel || item.spenderAddress.slice(0, 10)}`);
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : 'Unknown error';
-			console.error(`❌ Failed to build revoke tx for ${item.tokenSymbol}:`, msg);
 			errors.push(`${item.tokenSymbol}: ${msg}`);
 		}
 	}
@@ -151,8 +146,6 @@ export async function executeBatchRevoke(
 		const walletClient = await getWalletClient(config, { chainId });
 		if (!walletClient) throw new Error('No wallet client available');
 
-		console.log(`📤 Sending batch revoke with ${calls.length} calls`);
-
 		const result = await (walletClient.request as any)({
 			method: 'wallet_sendCalls',
 			params: [{
@@ -168,15 +161,13 @@ export async function executeBatchRevoke(
 		});
 
 		const txHash = (Array.isArray(result) ? result[0] : result) as `0x${string}`;
-		console.log('✅ Batch revoke transaction submitted:', txHash);
 
 		// Wait for confirmation
 		if (txHash && txHash.startsWith('0x')) {
 			try {
-				const receipt = await waitForTransactionReceipt(config, { hash: txHash, chainId });
-				console.log('✅ Batch revoke confirmed:', receipt.status);
+				await waitForTransactionReceipt(config, { hash: txHash, chainId });
 			} catch (e) {
-				console.log('⏳ Could not wait for receipt (batch may use different confirmation)');
+				// Silent wait
 			}
 		}
 
@@ -189,8 +180,6 @@ export async function executeBatchRevoke(
 		};
 
 	} catch (e: any) {
-		console.error('❌ Batch revoke failed:', e);
-
 		// If user rejected, don't fallback
 		if (e?.message?.includes('rejected') || e?.code === 4001 || e?.message?.includes('denied')) {
 			return {
@@ -202,8 +191,6 @@ export async function executeBatchRevoke(
 			};
 		}
 
-		// Fallback to legacy mode
-		console.log('🔄 Falling back to legacy sequential revoke...');
 		return executeLegacyRevoke(items, ownerAddress, chainId, onProgress);
 	}
 }
@@ -217,8 +204,6 @@ export async function executeLegacyRevoke(
 	chainId: ChainId,
 	onProgress?: (current: number, total: number) => void
 ): Promise<RevokeBatchResult> {
-	console.log(`🔧 Starting legacy revoke for ${items.length} approvals on chain ${chainId}`);
-
 	const txHashes: `0x${string}`[] = [];
 	const errors: string[] = [];
 	let revokedCount = 0;
@@ -236,8 +221,6 @@ export async function executeLegacyRevoke(
 		}
 
 		try {
-			console.log(`🔒 Revoking ${item.tokenSymbol} (${i + 1}/${items.length})...`);
-
 			let txHash: `0x${string}`;
 
 			if (item.type === 'ERC20') {
@@ -258,14 +241,12 @@ export async function executeLegacyRevoke(
 				});
 			}
 
-			console.log(`📝 Revoke tx: ${txHash}`);
 			txHashes.push(txHash);
 
 			// Wait for confirmation
 			const receipt = await waitForTransactionReceipt(config, { hash: txHash, chainId });
 			
 			if (receipt.status === 'success') {
-				console.log(`✅ Revoked ${item.tokenSymbol}`);
 				revokedCount++;
 			} else {
 				throw new Error('Transaction failed');
@@ -273,7 +254,6 @@ export async function executeLegacyRevoke(
 
 		} catch (e: any) {
 			const msg = e instanceof Error ? e.message : 'Unknown error';
-			console.error(`❌ Failed to revoke ${item.tokenSymbol}:`, msg);
 
 			// If user rejected, stop everything
 			if (e?.message?.includes('rejected') || e?.code === 4001) {
@@ -289,12 +269,6 @@ export async function executeLegacyRevoke(
 			errors.push(`${item.tokenSymbol}: ${msg}`);
 		}
 	}
-
-	console.log('🏁 Legacy revoke complete:', {
-		revokedCount,
-		failedCount: errors.length,
-		txHashes: txHashes.length
-	});
 
 	return {
 		success: revokedCount > 0,
@@ -313,8 +287,6 @@ export async function executeSingleRevoke(
 	ownerAddress: `0x${string}`,
 	chainId: ChainId
 ): Promise<{ success: boolean; txHash?: `0x${string}`; error?: string }> {
-	console.log(`🔒 Revoking single approval: ${item.tokenSymbol} -> ${item.spenderAddress.slice(0, 10)}`);
-
 	try {
 		let txHash: `0x${string}`;
 
@@ -336,13 +308,10 @@ export async function executeSingleRevoke(
 			});
 		}
 
-		console.log(`📝 Revoke tx: ${txHash}`);
-
 		// Wait for confirmation
 		const receipt = await waitForTransactionReceipt(config, { hash: txHash, chainId });
 		
 		if (receipt.status === 'success') {
-			console.log(`✅ Revoked ${item.tokenSymbol}`);
 			return { success: true, txHash };
 		} else {
 			return { success: false, error: 'Transaction failed on chain' };
@@ -350,7 +319,6 @@ export async function executeSingleRevoke(
 
 	} catch (e: any) {
 		const msg = e instanceof Error ? e.message : 'Unknown error';
-		console.error(`❌ Failed to revoke ${item.tokenSymbol}:`, msg);
 		return { success: false, error: msg };
 	}
 }
@@ -367,8 +335,6 @@ export async function executePartialRevoke(
 		return { success: false, error: 'Partial revoke only supported for ERC20 tokens' };
 	}
 
-	console.log(`🔒 Reducing allowance for ${item.tokenSymbol} to ${newAllowance.toString()}`);
-
 	try {
 		const txHash = await writeContract(config, {
 			address: item.tokenAddress,
@@ -378,13 +344,10 @@ export async function executePartialRevoke(
 			chainId
 		});
 
-		console.log(`📝 Partial revoke tx: ${txHash}`);
-
 		// Wait for confirmation
 		const receipt = await waitForTransactionReceipt(config, { hash: txHash, chainId });
 		
 		if (receipt.status === 'success') {
-			console.log(`✅ Reduced allowance for ${item.tokenSymbol}`);
 			return { success: true, txHash };
 		} else {
 			return { success: false, error: 'Transaction failed on chain' };
@@ -392,7 +355,6 @@ export async function executePartialRevoke(
 
 	} catch (e: any) {
 		const msg = e instanceof Error ? e.message : 'Unknown error';
-		console.error(`❌ Failed to reduce allowance for ${item.tokenSymbol}:`, msg);
 		return { success: false, error: msg };
 	}
 }

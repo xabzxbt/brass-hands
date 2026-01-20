@@ -76,7 +76,7 @@
 		try {
 			await switchChain(config, { chainId: chainId as any });
 		} catch (error) {
-			console.error("Failed to switch network:", error);
+			// Silent fail
 		}
 	}
 
@@ -90,7 +90,6 @@
 			try {
 				await switchChain(config, { chainId });
 			} catch (error) {
-				console.error("Failed to switch chain:", error);
 				alert("Please switch your wallet to the correct network to scan.");
 				return;
 			}

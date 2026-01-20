@@ -112,13 +112,6 @@ export async function executeBatch(
 	try {
 		if (onStatusUpdate) onStatusUpdate('ANALYZING');
 
-		console.log('🚀 Starting batch execution:', {
-			tokenCount: tokens.length,
-			strategy,
-			targetToken,
-			chainId
-		});
-
 		// 1. Gas Check (Basic)
 		const balance = await getBalance(config, {
 			address: ownerAddress,
@@ -132,7 +125,6 @@ export async function executeBatch(
 		validateTokenSafety(tokens);
 
 		const outputToken = getOutputTokenAddress(chainId, targetToken);
-		console.log('📍 Output token:', outputToken, 'on chain:', chainId);
 
 		// Filter out tokens that match the target asset (safety check)
 		const tokensToExecute = tokens.filter(token => {
@@ -147,18 +139,13 @@ export async function executeBatch(
 			throw new Error("No valid tokens to swap (cannot swap target asset for itself).");
 		}
 
-		console.log('🎯 Tokens to execute:', tokensToExecute.map(t => `${t.symbol} (chain: ${t.chainId})`));
-		console.log('📋 Execution strategy:', strategy);
-
 		let result: ExecutionResult;
 
 		if (strategy === 'STANDARD_BATCH' && tokensToExecute.length > 0) {
 			// Use EIP-5792 batch transaction - all approvals + swaps in one wallet call
-			console.log('🚀 Using STANDARD_BATCH (EIP-5792) for', tokensToExecute.length, 'tokens');
 			result = await executeBatchWithIndividualQuotes(tokensToExecute, outputToken, ownerAddress, chainId, onStatusUpdate);
 		} else {
 			// Fallback to legacy sequential transactions
-			console.log('🔧 Using LEGACY mode');
 			result = await executeLegacyBatch(tokensToExecute, outputToken, ownerAddress, chainId, onStatusUpdate);
 		}
 
@@ -169,7 +156,6 @@ export async function executeBatch(
 		}
 		return result;
 	} catch (error) {
-		console.error('❌ Execution failed:', error);
 		if (onStatusUpdate) onStatusUpdate('FAILED');
 		return {
 			success: false,
@@ -189,8 +175,6 @@ async function executeBatchWithIndividualQuotes(
 	chainId: number, 
 	onStatus?: (s: BatchStatus) => void
 ): Promise<ExecutionResult> {
-	console.log('📦 Building batch transaction for', tokens.length, 'tokens on chain', chainId);
-	
 	if (onStatus) onStatus('ANALYZING');
 	
 	const calls: Array<{ to: `0x${string}`; data: `0x${string}`; value: bigint }> = [];
@@ -209,8 +193,6 @@ async function executeBatchWithIndividualQuotes(
 		}
 		
 		try {
-			console.log(`📊 Getting quote for ${token.symbol} (${i + 1}/${tokens.length})...`);
-			
 			// IMPORTANT: Use the actual chainId from the function parameter, not from token
 			const quoteRequest: QuoteRequest = {
 				tokenIn: { ...token, chainId: chainId as ChainId },
@@ -225,14 +207,12 @@ async function executeBatchWithIndividualQuotes(
 			
 			if (!quote || !quote.isLiquid) {
 				const errorMsg = quote?.routeDescription || 'No route found';
-				console.warn(`⚠️ Skipping ${token.symbol}: ${errorMsg}`);
 				errors.push(`${token.symbol}: ${errorMsg}`);
 				failedTokens.push(token.symbol);
 				continue;
 			}
 			
 			if (!quote.to || quote.to === '0x0000000000000000000000000000000000000000' || !quote.data || quote.data === '0x') {
-				console.warn(`⚠️ Skipping ${token.symbol}: Invalid quote data`);
 				errors.push(`${token.symbol}: Invalid quote`);
 				failedTokens.push(token.symbol);
 				continue;
@@ -244,13 +224,11 @@ async function executeBatchWithIndividualQuotes(
 			const checks = await checkMultipleAllowances([{ token: { ...token, chainId: chainId as ChainId }, amount: token.balance, spender }], owner);
 			
 			if (checks[0].needsApproval) {
-				console.log(`📝 Adding approval for ${token.symbol} to spender ${spender}`);
 				const approvalTx = buildApprovalTx({ ...token, chainId: chainId as ChainId }, checks[0].requiredAmount, spender);
 				calls.push(approvalTx);
 			}
 			
 			// Add swap call
-			console.log(`🔄 Adding swap for ${token.symbol}`);
 			calls.push({
 				to: quote.to,
 				data: quote.data,
@@ -262,7 +240,6 @@ async function executeBatchWithIndividualQuotes(
 			
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : 'Unknown error';
-			console.error(`❌ Failed to prepare ${token.symbol}:`, msg);
 			errors.push(`${token.symbol}: ${msg}`);
 			failedTokens.push(token.symbol);
 		}
@@ -279,7 +256,6 @@ async function executeBatchWithIndividualQuotes(
 		};
 	}
 	
-	console.log(`📤 Sending batch with ${calls.length} calls (approvals + swaps) on chain ${chainId}`);
 	if (onStatus) onStatus('SWAPPING');
 	
 	// Get wallet client and send batch
@@ -302,15 +278,13 @@ async function executeBatchWithIndividualQuotes(
 		});
 		
 		const txHash = (Array.isArray(result) ? result[0] : result) as `0x${string}`;
-		console.log('✅ Batch transaction submitted:', txHash);
 		
 		// Wait for confirmation if we got a valid hash
 		if (txHash && typeof txHash === 'string' && txHash.startsWith('0x') && txHash.length === 66) {
 			try {
-				const receipt = await waitForTransactionReceipt(config, { hash: txHash, chainId: chainId as ChainId });
-				console.log('✅ Transaction confirmed:', receipt.status);
+				await waitForTransactionReceipt(config, { hash: txHash, chainId: chainId as ChainId });
 			} catch (e) {
-				console.log('⏳ Could not wait for receipt (batch may use different confirmation flow)');
+				// Silent wait
 			}
 		}
 		
@@ -325,8 +299,6 @@ async function executeBatchWithIndividualQuotes(
 		};
 		
 	} catch (e: any) {
-		console.error('❌ Batch transaction failed:', e);
-		
 		// If user rejected, don't fallback
 		if (e?.message?.includes('rejected') || e?.code === 4001 || e?.message?.includes('denied')) {
 			return {
@@ -338,7 +310,6 @@ async function executeBatchWithIndividualQuotes(
 			};
 		}
 		
-		console.log('🔄 Falling back to legacy sequential execution...');
 		return executeLegacyBatch(tokens, outputToken, owner, chainId, onStatus);
 	}
 }
@@ -356,20 +327,15 @@ async function executeLegacyBatch(
 	const successfulTokens: string[] = [];
 	const failedTokens: string[] = [];
 
-	console.log('🔧 Executing legacy batch for', tokens.length, 'tokens on chain', chainId);
-
 	for (let i = 0; i < tokens.length; i++) {
 		const token = tokens[i];
 		
 		// Add delay between tokens to avoid rate limiting
 		if (i > 0) {
-			console.log('⏳ Waiting before next token...');
 			await delay(1000);
 		}
 		
 		try {
-			console.log(`\n📊 Processing ${token.symbol} (${i + 1}/${tokens.length})...`);
-			
 			// Get fresh quote for this token
 			// IMPORTANT: Use the actual chainId from parameter
 			const quoteRequest: QuoteRequest = {
@@ -380,19 +346,11 @@ async function executeLegacyBatch(
 				recipient: owner
 			};
 			
-			console.log('📝 Quote request:', {
-				tokenIn: token.symbol,
-				tokenOut: outputToken,
-				amountIn: quoteRequest.amountIn.toString(),
-				chainId: chainId
-			});
-			
 			const quotes = await getMultipleQuotes([quoteRequest]);
 			const quote = quotes[0];
 			
 			if (!quote) {
 				const errorMsg = 'Failed to get quote';
-				console.warn(`⚠️ Skipping ${token.symbol}: ${errorMsg}`);
 				errors.push(`${token.symbol}: ${errorMsg}`);
 				failedTokens.push(token.symbol);
 				continue;
@@ -400,7 +358,6 @@ async function executeLegacyBatch(
 
 			if (!quote.isLiquid) {
 				const errorMsg = quote.routeDescription || 'No route found';
-				console.warn(`⚠️ Skipping ${token.symbol}: ${errorMsg}`);
 				errors.push(`${token.symbol}: ${errorMsg}`);
 				failedTokens.push(token.symbol);
 				continue;
@@ -408,7 +365,6 @@ async function executeLegacyBatch(
 
 			if (!quote.to || quote.to === '0x0000000000000000000000000000000000000000') {
 				const errorMsg = 'Invalid quote - no destination address';
-				console.warn(`⚠️ Skipping ${token.symbol}: ${errorMsg}`);
 				errors.push(`${token.symbol}: ${errorMsg}`);
 				failedTokens.push(token.symbol);
 				continue;
@@ -416,18 +372,10 @@ async function executeLegacyBatch(
 
 			if (!quote.data || quote.data === '0x') {
 				const errorMsg = 'Invalid quote - no transaction data';
-				console.warn(`⚠️ Skipping ${token.symbol}: ${errorMsg}`);
 				errors.push(`${token.symbol}: ${errorMsg}`);
 				failedTokens.push(token.symbol);
 				continue;
 			}
-			
-			console.log('✅ Got valid quote:', {
-				to: quote.to,
-				value: quote.value?.toString(),
-				outAmount: quote.outAmount?.toString(),
-				routeDescription: quote.routeDescription
-			});
 			
 			const spender = (quote.spender || quote.to) as `0x${string}`;
 			
@@ -436,7 +384,6 @@ async function executeLegacyBatch(
 			const checks = await checkMultipleAllowances([{ token: tokenWithChain, amount: token.balance, spender }], owner);
 			
 			if (checks[0].needsApproval) {
-				console.log(`🔓 Approving ${token.symbol} for spender ${spender} on chain ${chainId}`);
 				if (onStatus) onStatus('APPROVING');
 				
 				try {
@@ -459,7 +406,6 @@ async function executeLegacyBatch(
 						chainId: chainId as ChainId
 					});
 					
-					console.log('📝 Approval tx:', approveHash);
 					txHashes.push(approveHash);
 					
 					// Wait for approval to be confirmed
@@ -467,7 +413,6 @@ async function executeLegacyBatch(
 						hash: approveHash, 
 						chainId: chainId as ChainId 
 					});
-					console.log('✅ Approval confirmed, status:', approvalReceipt.status);
 					
 					if (approvalReceipt.status !== 'success') {
 						throw new Error('Approval transaction failed');
@@ -477,18 +422,14 @@ async function executeLegacyBatch(
 					await delay(500);
 					
 				} catch (approveError: any) {
-					console.error('❌ Approval failed:', approveError);
 					if (approveError?.message?.includes('rejected') || approveError?.code === 4001) {
 						throw new Error('Transaction rejected by user');
 					}
 					throw approveError;
 				}
-			} else {
-				console.log(`✅ ${token.symbol} already approved`);
 			}
 			
 			// Execute the swap
-			console.log(`🔄 Executing swap for ${token.symbol} on chain ${chainId}`);
 			if (onStatus) onStatus('SWAPPING');
 			
 			try {
@@ -500,7 +441,6 @@ async function executeLegacyBatch(
 					chainId: chainId as ChainId
 				});
 				
-				console.log('📝 Swap tx:', swapHash);
 				txHashes.push(swapHash);
 				
 				// Wait for swap to be confirmed
@@ -508,7 +448,6 @@ async function executeLegacyBatch(
 					hash: swapHash, 
 					chainId: chainId as ChainId 
 				});
-				console.log('✅ Swap confirmed, status:', swapReceipt.status);
 				
 				if (swapReceipt.status !== 'success') {
 					throw new Error('Swap transaction failed');
@@ -518,10 +457,7 @@ async function executeLegacyBatch(
 				totalOut += quote.amountOut;
 				successfulTokens.push(token.symbol);
 				
-				console.log(`✅ Successfully swapped ${token.symbol}`);
-				
 			} catch (swapError: any) {
-				console.error('❌ Swap failed:', swapError);
 				if (swapError?.message?.includes('rejected') || swapError?.code === 4001) {
 					throw new Error('Transaction rejected by user');
 				}
@@ -530,7 +466,6 @@ async function executeLegacyBatch(
 			
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : 'Unknown error';
-			console.error(`❌ Failed to swap ${token.symbol}:`, msg);
 			
 			// If user rejected, stop everything
 			if (msg.includes('rejected by user')) {
@@ -571,18 +506,11 @@ async function executeLegacyBatch(
 		};
 	}
 
-	console.log('🏁 Batch execution complete:', {
-		successfulTxs: txHashes.length,
-		totalSwapped: totalSwapped.toString(),
-		totalOut: totalOut.toString(),
-		errors
-	});
-
 	return { 
 		success: txHashes.length > 0, 
 		txHashes, 
 		totalSwapped, 
-		estimatedOutput: totalOut,
+		estimatedOutput: totalOut, 
 		error: errors.length > 0 ? errors.join(' | ') : undefined,
 		successfulTokens,
 		failedTokens

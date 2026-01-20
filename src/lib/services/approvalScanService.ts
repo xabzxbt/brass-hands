@@ -104,7 +104,6 @@ export async function getTokenApprovals(
 	const chainName = COVALENT_CHAIN_NAMES[chainId];
 	
 	if (!chainName) {
-		console.warn(`⚠️ No Covalent chain name mapping for chain ID: ${chainId}`);
 		return [];
 	}
 
@@ -122,8 +121,6 @@ export async function getTokenApprovals(
 		});
 
 		if (!response.ok) {
-			const errorText = await response.text();
-			console.error(`❌ Covalent API error (${response.status}):`, errorText);
 			throw new Error(`Covalent API error: ${response.status} ${response.statusText}`);
 		}
 
@@ -193,7 +190,6 @@ export async function getNftApprovals(
 			}
 		}
 
-		console.log(`✅ Found ${nftApprovals.length} NFT approvals on ${chainName}`);
 		return nftApprovals;
 	} catch (error) {
 		// Silent fail for NFTs
@@ -240,7 +236,6 @@ export async function getAllApprovals(
 				totalValueAtRiskQuote: totalValueAtRisk
 			});
 		} catch (error) {
-			console.error(`Failed to fetch approvals for chain ${chainId}:`, error);
 			// Continue with other chains even if one fails
 			results.push({
 				address: walletAddress,

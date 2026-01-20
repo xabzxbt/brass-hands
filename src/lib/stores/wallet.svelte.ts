@@ -35,14 +35,8 @@ class WalletStore {
 	setConnected(address: `0x${string}`, chainId: number) {
 		// FIX: Validate address format
 		if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
-			console.error('Invalid address format:', address);
 			this.setError('Invalid wallet address format');
 			return;
-		}
-		
-		// FIX: Validate and warn about unsupported chains
-		if (!isValidChainId(chainId)) {
-			console.warn('Connected to unsupported chain:', chainId);
 		}
 		
 		this.isConnected = true;
@@ -58,9 +52,8 @@ class WalletStore {
 			this.chainId = chainId;
 			this.error = null;
 		} else {
-			console.warn('Switched to unsupported chain:', chainId);
 			this.chainId = null;
-			// Don't set error - just log warning
+			// Don't set error
 		}
 	}
 
@@ -80,7 +73,6 @@ class WalletStore {
 
 	setError(error: string) {
 		this.error = error;
-		console.error('⚠️ Wallet error:', error);
 	}
 
 	clearError() {

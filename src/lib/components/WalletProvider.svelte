@@ -13,7 +13,7 @@
 				walletStore.setConnected(account.address as `0x${string}`, account.chainId);
 				detectStrategy(account.address as `0x${string}`, account.chainId)
 					.then(s => walletStore.setStrategy(s))
-					.catch(console.error);
+					.catch(() => {});
 			} else {
 				walletStore.setDisconnected();
 			}
@@ -27,7 +27,7 @@
 					walletStore.setConnected(account.address as `0x${string}`, account.chainId);
 					detectStrategy(account.address as `0x${string}`, account.chainId)
 						.then(s => walletStore.setStrategy(s))
-						.catch(console.error);
+						.catch(() => {});
 				} else if (account.isDisconnected) {
 					walletStore.setDisconnected();
 				}
@@ -41,7 +41,7 @@
 				if (account.isConnected && account.address) {
 					detectStrategy(account.address as `0x${string}`, chainId)
 						.then(s => walletStore.setStrategy(s))
-						.catch(console.error);
+						.catch(() => {});
 				}
 			}
 		});

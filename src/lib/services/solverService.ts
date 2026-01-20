@@ -88,8 +88,6 @@ export async function getMultiInputQuote(requests: QuoteRequest[]): Promise<Quot
 			usePermit: false
 		};
 
-		console.log('🔄 Multi-Input Quote Request:', JSON.stringify(payload, null, 2));
-
 		const response = await safeFetch(`${RELAY_API_BASE}/execute/swap/multi-input`, {
 			method: 'POST',
 			headers,
@@ -99,7 +97,6 @@ export async function getMultiInputQuote(requests: QuoteRequest[]): Promise<Quot
 
 		if (!response.ok) {
 			const errorBody = await response.json().catch(() => ({}));
-			console.error('❌ Relay Multi-Input Quote Error:', response.status, errorBody, 'Payload:', JSON.stringify(payload));
 			return { 
 				...createEmptyQuote(requests[0]), 
 				isLiquid: false, 
@@ -109,12 +106,10 @@ export async function getMultiInputQuote(requests: QuoteRequest[]): Promise<Quot
 		}
 
 		const data: RelayResponse = await response.json();
-		console.log('✅ Multi-Input Quote Response:', JSON.stringify(data, null, 2));
 
 		// Extract transaction data from steps
 		const txData = extractTransactionFromSteps(data.steps);
 		if (!txData) {
-			console.warn('⚠️ No transaction data found in multi-input response');
 			return null;
 		}
 
@@ -142,7 +137,6 @@ export async function getMultiInputQuote(requests: QuoteRequest[]): Promise<Quot
 			slippagePercent: 0.5
 		};
 	} catch (e) {
-		console.error('❌ Relay Multi-Input Quote Failed:', e);
 		return null;
 	}
 }
@@ -289,8 +283,6 @@ async function fetchRelayQuote(request: QuoteRequest): Promise<QuoteResponse | n
 			usePermit: false
 		};
 
-		console.log('🔄 Quote Request:', JSON.stringify(payload, null, 2));
-
 		const response = await safeFetch(`${RELAY_API_BASE}/quote`, {
 			method: 'POST',
 			headers,
@@ -303,17 +295,14 @@ async function fetchRelayQuote(request: QuoteRequest): Promise<QuoteResponse | n
 			const errorData = await response.json().catch(() => ({}));
 			const errorCode = errorData?.code || '';
 			const message = getRelayErrorMessage(errorCode, errorData?.message);
-			console.warn('⚠️ Relay Quote Error:', response.status, errorCode, message);
 			return { ...createEmptyQuote(request), isLiquid: false, routeDescription: message };
 		}
 
 		const data: RelayResponse = await response.json();
-		console.log('✅ Quote Response:', JSON.stringify(data, null, 2));
 
 		// Extract transaction data from steps
 		const txData = extractTransactionFromSteps(data.steps);
 		if (!txData) {
-			console.warn('⚠️ No transaction data found in response');
 			return { ...createEmptyQuote(request), isLiquid: false, routeDescription: 'No transaction data' };
 		}
 
@@ -352,7 +341,6 @@ async function fetchRelayQuote(request: QuoteRequest): Promise<QuoteResponse | n
 		};
 	} catch (error) {
 		if (error instanceof Error && error.message === '429') throw error;
-		console.error('❌ Quote fetch failed:', error);
 		return { 
 			...createEmptyQuote(request), 
 			isLiquid: false, 
@@ -501,10 +489,7 @@ export function validateQuote(quote: QuoteResponse): void {
 	}
 
 	if (quote.priceImpact > 5) {
-		console.warn(
-			`⚠️ WARNING: High price impact (${quote.priceImpact.toFixed(2)}%). ` +
-				`You may receive less than expected.`
-		);
+		// Silent warning
 	}
 
 	if (quote.amountOut === 0n) {
@@ -619,7 +604,6 @@ async function fetchQuoteWithRetry(
 			// Check for rate limit error (429)
 			if (error?.message?.includes('429') || error?.message?.includes('rate limit')) {
 				const delay = Math.pow(2, attempt) * 500; // 500ms, 1s, 2s
-				console.warn(`⚠️ Rate limited, retrying in ${delay}ms...`);
 				await new Promise(r => setTimeout(r, delay));
 				continue;
 			}
@@ -629,8 +613,5 @@ async function fetchQuoteWithRetry(
 		}
 	}
 
-	if (lastError) {
-		console.error('❌ Quote fetch failed after retries:', lastError);
-	}
 	return null;
 }

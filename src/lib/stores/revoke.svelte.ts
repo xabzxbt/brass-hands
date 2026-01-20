@@ -176,7 +176,6 @@ function createRevokeStore() {
 
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : 'Unknown error';
-			console.error('❌ Scan failed:', msg);
 			error = msg;
 			status = 'FAILED';
 		}

@@ -18,7 +18,6 @@ export async function checkAllowance(
 ): Promise<AllowanceCheckResult> {
 	// FIX: Validate inputs
 	if (!token.address || !isAddress(token.address)) {
-		console.error('Invalid token address:', token.address);
 		return {
 			needsApproval: true,
 			currentAllowance: 0n,
@@ -28,7 +27,6 @@ export async function checkAllowance(
 	}
 	
 	if (!spender || !isAddress(spender)) {
-		console.error('Invalid spender address:', spender);
 		return {
 			needsApproval: true,
 			currentAllowance: 0n,
@@ -38,7 +36,6 @@ export async function checkAllowance(
 	}
 	
 	if (!owner || !isAddress(owner)) {
-		console.error('Invalid owner address:', owner);
 		return {
 			needsApproval: true,
 			currentAllowance: 0n,
@@ -65,7 +62,6 @@ export async function checkAllowance(
 			token
 		};
 	} catch (error) {
-		console.error('❌ Failed to check allowance:', error);
 		return {
 			needsApproval: true,
 			currentAllowance: 0n,

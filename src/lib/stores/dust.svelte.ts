@@ -64,7 +64,6 @@ class DustStore {
 			
 			// FIX: Check if this scan is still current
 			if (currentGeneration !== this.scanGeneration) {
-				console.log('Scan superseded by newer scan, discarding results');
 				return;
 			}
 
@@ -79,7 +78,6 @@ class DustStore {
 			// FIX: Only update error if this scan is still current
 			if (currentGeneration === this.scanGeneration) {
 				this.error = err instanceof Error ? err.message : 'Failed to scan tokens';
-				console.error('Scan error:', err);
 			}
 		} finally {
 			// FIX: Only update loading state if this scan is still current
@@ -101,7 +99,6 @@ class DustStore {
 			// Get destination token address
 			const addresses = TOKEN_ADDRESSES[chainId as keyof typeof TOKEN_ADDRESSES];
 			if (!addresses) {
-				console.warn('No token addresses configured for chain', chainId);
 				return;
 			}
 			
@@ -148,7 +145,7 @@ class DustStore {
 				}
 			}
 		} catch (err) {
-			console.error('Route check error:', err);
+			// Silent fail
 		} finally {
 			this.isCheckingRoutes = false;
 		}
@@ -276,7 +273,6 @@ class DustStore {
 			
 			// FIX: Only update if this is still the current quote request
 			if (currentGeneration !== this.quoteGeneration) {
-				console.log('Quote request superseded, discarding results');
 				return;
 			}
 			
@@ -294,7 +290,6 @@ class DustStore {
 				}
 			});
 		} catch (err) {
-			console.error('Failed to fetch quotes:', err);
 			// FIX: Only update error if this is still current
 			if (currentGeneration === this.quoteGeneration) {
 				this.error = err instanceof Error ? err.message : 'Failed to fetch quotes';
@@ -337,7 +332,6 @@ class DustStore {
 				this.selectedTokens.length
 			);
 		} catch (err) {
-			console.error('Failed to estimate gas:', err);
 			this.estimatedGasCost = 0;
 		}
 	}
