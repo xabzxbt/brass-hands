@@ -702,30 +702,6 @@ export function filterDustTokens(tokens: Token[], filter?: Partial<TokenFilter>)
 	const filterConfig: TokenFilter = {
 		minValueUsd: filter?.minValueUsd ?? DUST_CONFIG.MIN_VALUE,
 		maxValueUsd: filter?.maxValueUsd ?? DUST_CONFIG.MAX_VALUE,
-		excludeTaxTokens: filter?.excludeTaxTokens ?? false, // Show tax tokens by default but maybe with label
-		allowedRiskLevels: filter?.allowedRiskLevels ?? ['LOW', 'MEDIUM', 'HIGH']
-	};
-
-	return tokens.filter((token) => {
-		const inValueRange =
-			token.valueUsd >= filterConfig.minValueUsd && token.valueUsd <= filterConfig.maxValueUsd;
-		if (!inValueRange) return false;
-
-		if (filterConfig.excludeTaxTokens) {
-			if (token.isTaxToken) return false;
-			if (TAX_TOKEN_BLOCKLIST.has(token.address.toLowerCase())) return false;
-		}
-
-		if (!filterConfig.allowedRiskLevels.includes(token.riskLevel)) return false;
-
-		return true;
-	});
-}
-
-export function filterDustTokens(tokens: Token[], filter?: Partial<TokenFilter>): Token[] {
-	const filterConfig: TokenFilter = {
-		minValueUsd: filter?.minValueUsd ?? DUST_CONFIG.MIN_VALUE,
-		maxValueUsd: filter?.maxValueUsd ?? DUST_CONFIG.MAX_VALUE,
 		excludeTaxTokens: filter?.excludeTaxTokens ?? false,
 		allowedRiskLevels: filter?.allowedRiskLevels ?? ['LOW', 'MEDIUM', 'HIGH']
 	};
