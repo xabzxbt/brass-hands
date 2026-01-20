@@ -55,6 +55,15 @@
 				Revoke
 			</a>
 
+			<a 
+				href="https://token-price-aggregator.vercel.app/"
+				target="_blank"
+				rel="noopener noreferrer"
+				class="px-3 py-1.5 text-sm font-bold uppercase tracking-tight transition-all border-2 bg-white text-black border-transparent hover:border-black"
+			>
+				Agregator
+			</a>
+
 			<div class="px-3 py-1.5 text-sm font-bold uppercase tracking-tight transition-all border-transparent text-gray-400 cursor-not-allowed flex items-center gap-2 group relative">
 				Gas Refuel
 				<span class="text-[8px] border border-gray-300 px-1 bg-gray-50 group-hover:bg-black group-hover:text-white transition-colors">SOON</span>

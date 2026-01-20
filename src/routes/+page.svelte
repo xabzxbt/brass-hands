@@ -223,7 +223,7 @@
 			<p class="text-sm font-bold text-gray-400 uppercase tracking-[0.2em]">What would you like to do today?</p>
 		</div>
 
-		<div class="grid grid-cols-1 md:grid-cols-3 gap-8 w-full">
+		<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 w-full">
 			<!-- SWEEP CARD -->
 			<button 
 				onclick={() => isStarted = true}
@@ -278,6 +278,25 @@
 					Under Development
 				</div>
 			</div>
+
+			<!-- AGGREGATOR CARD -->
+			<a 
+				href="https://token-price-aggregator.vercel.app/"
+				target="_blank"
+				rel="noopener noreferrer"
+				class="group flex flex-col bg-white border-4 border-black p-8 shadow-[8px_8px_0px_0px_rgba(132,204,22,0.2)] hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[12px_12px_0px_0px_rgba(132,204,22,1)] transition-all"
+			>
+				<div class="w-16 h-16 bg-black text-white flex items-center justify-center mb-6 group-hover:bg-[#84cc16] transition-colors border-2 border-black shadow-[4px_4px_0px_0px_rgba(132,204,22,0.2)]">
+					<span class="text-3xl font-black italic">A</span>
+				</div>
+				<h3 class="text-3xl font-black uppercase mb-3 text-black group-hover:text-[#84cc16] transition-colors leading-tight">AGREGATOR</h3>
+				<p class="text-sm font-bold text-gray-500 uppercase leading-relaxed mb-8 flex-grow">
+					Compare token prices across multiple aggregators to find the best swap rates and liquidity.
+				</p>
+				<div class="flex items-center gap-2 text-black font-black uppercase text-xs tracking-widest border-t-2 border-black pt-4 mt-auto">
+					Open Agregator <span class="group-hover:translate-x-1 transition-transform">→</span>
+				</div>
+			</a>
 		</div>
 	</div>
 {:else}
