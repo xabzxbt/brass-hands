@@ -34,7 +34,6 @@
 			detectStrategy(address, chainId).then((detectedStrategy) => {
 				// Sync the detected strategy to revoke store
 				revokeStore.setStrategy(detectedStrategy);
-				console.log('🔧 Revoke strategy set to:', detectedStrategy);
 			});
 		}
 	});
@@ -81,7 +80,6 @@
 		// Switch to the correct chain if needed
 		if (chainId !== selectedChainForRevoke) {
 			try {
-				console.log(`🔄 Switching from chain ${chainId} to ${selectedChainForRevoke}`);
 				await switchChain(config, { chainId: selectedChainForRevoke });
 				// Wait a bit for the chain switch to complete
 				await new Promise(resolve => setTimeout(resolve, 1000));
@@ -101,7 +99,6 @@
 		// Switch to the correct chain if needed
 		if (chainId !== item.chainId) {
 			try {
-				console.log(`🔄 Switching from chain ${chainId} to ${item.chainId}`);
 				await switchChain(config, { chainId: item.chainId });
 				// Wait a bit for the chain switch to complete
 				await new Promise(resolve => setTimeout(resolve, 1000));

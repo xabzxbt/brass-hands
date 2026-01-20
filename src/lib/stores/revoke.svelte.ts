@@ -107,27 +107,21 @@ function createRevokeStore() {
 
 	// Actions
 	async function scanApprovals(walletAddress: `0x${string}`, chainIds?: ChainId[]) {
-		console.log(`🚀 Starting approval scan for ${walletAddress}...`);
 		status = 'SCANNING';
 		error = null;
 		revokeItems = [];
 		approvalsData = [];
 
 		const chainsToScan = chainIds || filter.selectedChains;
-		console.log(`🔗 Scanning chains:`, chainsToScan);
 
 		try {
 			const results = await getAllApprovals(walletAddress, chainsToScan);
-			console.log(`📦 Scan complete. Got results for ${results.length} chains.`);
 			approvalsData = results;
 
 			// Transform to RevokeItems
 			const items: RevokeItem[] = [];
 
 			for (const response of results) {
-				const chainName = response.chainName;
-				console.log(`⛓️ Processing chain ${response.chainId} (${chainName}): ${response.tokenApprovals.length} tokens, ${response.nftApprovals.length} NFTs`);
-				
 				for (const approval of response.tokenApprovals) {
 					for (const spender of approval.spenders) {
 						items.push({

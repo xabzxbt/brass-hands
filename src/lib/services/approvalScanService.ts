@@ -114,7 +114,6 @@ export async function getTokenApprovals(
 	const url = `${COVALENT_BASE_URL}/${chainName}/approvals/${addr}/?key=${COVALENT_API_KEY}`;
 
 	try {
-		console.log(`🔍 Scanning token approvals on ${chainName}...`);
 		const response = await fetch(url, {
 			method: 'GET',
 			headers: {
@@ -131,15 +130,12 @@ export async function getTokenApprovals(
 		const data: CovalentApprovalsResponse = await response.json();
 
 		if (data.error) {
-			console.error(`❌ Covalent business error:`, data.error_message);
 			throw new Error(data.error_message || 'Unknown Covalent API error');
 		}
 
 		const items = data.data?.items || [];
-		console.log(`✅ Found ${items.length} token approvals on ${chainName}`);
 		return items.map(item => transformTokenApproval(item));
 	} catch (error) {
-		console.error(`❌ Failed to fetch token approvals on ${chainName}:`, error);
 		throw error;
 	}
 }
@@ -162,7 +158,6 @@ export async function getNftApprovals(
 	const url = `${COVALENT_BASE_URL}/${chainName}/nft/approvals/${addr}/?key=${COVALENT_API_KEY}`;
 
 	try {
-		console.log(`🔍 Scanning NFT approvals on ${chainName}...`);
 		const response = await fetch(url, {
 			method: 'GET',
 			headers: {
